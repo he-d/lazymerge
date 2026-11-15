@@ -1,0 +1,2032 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LazyMerge</title>
+<!--
+  Folder and file compare in the browser, modelled on Beyond Compare (Kanagawa Wave theme).
+  The folders are read and written with the File System Access API of the browser (Edge / Chrome).
+  The first script (LM) is pure logic without DOM access and can be tested with Node.
+-->
+<style>
+:root{
+  --sumiInk0:#16161D; --sumiInk1:#181820; --sumiInk2:#1A1A22; --sumiInk3:#1F1F28; --sumiInk4:#2A2A37; --sumiInk5:#363646; --sumiInk6:#54546D;
+  --waveBlue1:#223249; --waveBlue2:#2D4F67;
+  --winterGreen:#2B3328; --winterYellow:#49443C; --winterRed:#43242B; --winterBlue:#252535;
+  --autumnGreen:#76946A; --autumnRed:#C34043; --autumnYellow:#DCA561;
+  --fujiWhite:#DCD7BA; --oldWhite:#C8C093; --fujiGray:#727169;
+  --crystalBlue:#7E9CD8; --springBlue:#7FB4CA; --springGreen:#98BB6C; --carpYellow:#E6C384; --boatYellow2:#C0A36E;
+  --surimiOrange:#FFA066; --waveRed:#E46876; --oniViolet:#957FB8; --waveAqua2:#7AA89F; --sakuraPink:#D27E99;
+  --font:"Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono:"Cascadia Code", "JetBrains Mono", Consolas, ui-monospace, monospace;
+  --lh:18px;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+html,body{height:100%;margin:0}
+body{display:flex;flex-direction:column;overflow:hidden;background:var(--sumiInk3);color:var(--fujiWhite);font:13px/1.4 var(--font);scrollbar-color:var(--sumiInk5) var(--sumiInk1)}
+button,input,textarea{font:inherit;color:inherit}
+input[type=text],textarea,.btn{background:var(--sumiInk4);border:1px solid var(--sumiInk5);color:var(--fujiWhite);border-radius:6px;padding:4px 8px;font-size:12px}
+input::placeholder,textarea::placeholder{color:var(--fujiGray)}
+input:focus-visible,textarea:focus-visible,.btn:focus-visible,.tbtn:focus-visible,#tree:focus-visible,#dvScroll:focus-visible{outline:2px solid var(--crystalBlue);outline-offset:-2px}
+.btn{cursor:pointer;white-space:nowrap}
+.btn:hover:not(:disabled){background:var(--sumiInk5)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--waveBlue2);border-color:var(--crystalBlue)}
+.btn.primary:hover:not(:disabled){background:var(--waveBlue1)}
+/* Save with unsaved changes (green), Reload when the file changed on disk (orange) */
+.btn.dirty{background:var(--winterGreen);border-color:var(--autumnGreen);color:var(--springGreen);font-weight:600}
+.btn.dirty:hover:not(:disabled){background:color-mix(in srgb,var(--autumnGreen) 30%,var(--sumiInk4))}
+.btn.stale{background:color-mix(in srgb,var(--surimiOrange) 16%,var(--sumiInk4));border-color:var(--surimiOrange);color:var(--surimiOrange);font-weight:600}
+.btn.stale:hover:not(:disabled){background:color-mix(in srgb,var(--surimiOrange) 28%,var(--sumiInk4))}
+.grow{flex:1}
+
+/* toolbar */
+.tb{flex:none;display:flex;flex-wrap:wrap;align-items:stretch;gap:2px;padding:4px 8px;background:var(--sumiInk1);border-bottom:1px solid var(--sumiInk4)}
+.brand{display:flex;align-items:center;padding:0 14px 0 4px;font-weight:700;font-size:15px;color:var(--carpYellow);letter-spacing:.3px}
+.tbtn{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:58px;padding:3px 8px;background:none;border:1px solid transparent;border-radius:6px;color:var(--oldWhite);font-size:12px;cursor:pointer}
+.tbtn .i{font-size:16px;line-height:19px;color:var(--crystalBlue)}
+.tbtn:hover:not(:disabled){background:var(--sumiInk4);color:var(--fujiWhite)}
+.tbtn[aria-pressed="true"]{background:var(--waveBlue1);border-color:var(--waveBlue2);color:var(--fujiWhite)}
+.tbtn:disabled{opacity:.4;cursor:default}
+.sep{width:1px;background:var(--sumiInk5);margin:4px 6px}
+.flt{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:0 6px;color:var(--oldWhite);font-size:12px}
+.flt label{display:flex;align-items:center;gap:6px}
+#find{width:140px} #include{width:120px} #exclude{width:220px}
+.chk input{accent-color:var(--crystalBlue);margin:0}
+
+/* folder bar */
+.paths{flex:none;display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--sumiInk4);border-bottom:1px solid var(--sumiInk4)}
+.pth{display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--sumiInk2);min-width:0}
+.pth .lbl{width:140px;flex:none}
+.fold{font-family:var(--mono);font-size:12px;color:var(--oldWhite);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fold.none{color:var(--fujiGray);font-style:italic;font-family:var(--font)}
+
+/* folder compare */
+main{flex:1;min-height:0;display:flex;flex-direction:column}
+.fv{flex:1;min-height:0;display:flex;flex-direction:column}
+main.split .fv{flex:none;height:var(--fvh,36%);min-height:80px}
+.thead,.row{display:grid;grid-template-columns:minmax(0,1fr) 92px 150px 30px minmax(0,1fr) 92px 150px}
+.thead{flex:none;background:var(--sumiInk1);border-bottom:1px solid var(--sumiInk4);color:var(--oldWhite);font-size:12px}
+.thead>div{padding:4px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.thead .num{text-align:right}
+#hL,#hR{font-weight:600;color:var(--fujiWhite)}
+#tree{flex:1;min-height:0;overflow:auto;outline:none}
+.row{height:22px;align-items:center;font-size:12.5px;cursor:default;user-select:none}
+.row:hover{background:var(--sumiInk4)}
+.row.sel{background:var(--waveBlue1)}
+.row>div{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:0 8px}
+.row>.nm{display:flex;align-items:center;gap:5px;padding-left:calc(var(--d) * 16px + 4px)}
+.tw{width:12px;flex:none;color:var(--fujiGray);font-size:10px;text-align:center}
+.ico{width:14px;height:14px;flex:none;color:var(--fujiGray)}
+.dir .ico{color:var(--boatYellow2)}
+.tx{overflow:hidden;text-overflow:ellipsis}
+.sz,.dt{text-align:right;color:var(--fujiGray);font-variant-numeric:tabular-nums;font-size:12px}
+.mid{text-align:center;font-weight:700;padding:0 !important}
+.st-same .tx{color:var(--fujiGray)}
+.dir.st-same .tx{color:var(--oldWhite)}
+.st-minor .tx,.st-minor .mid{color:var(--springBlue)}
+.st-diff .tx,.st-diff .mid,.dir.st-diff .ico{color:var(--waveRed)}
+.st-left .L .tx,.st-right .R .tx,.st-left .L .ico,.st-right .R .ico{color:var(--oniViolet)}
+.st-error .tx,.st-error .mid{color:var(--surimiOrange)}
+.st-pending .tx{color:var(--oldWhite)}
+.st-pending .mid{color:var(--fujiGray)}
+.empty{padding:48px 16px;text-align:center;color:var(--fujiGray);line-height:1.7}
+.empty b{color:var(--oldWhite)}
+.fv-status,.dv-status{flex:none;display:flex;flex-wrap:wrap;gap:4px 14px;padding:3px 10px;background:var(--sumiInk1);border-top:1px solid var(--sumiInk4);font-size:12px;color:var(--fujiGray)}
+.fv-status .err{color:var(--waveRed)} .fv-status .hint{color:var(--carpYellow)}
+#fvSum b{font-weight:600}
+.c-diff{color:var(--waveRed)} .c-left,.c-right{color:var(--oniViolet)} .c-minor{color:var(--springBlue)}
+
+#split{flex:none;height:6px;cursor:row-resize;background:var(--sumiInk4);border-top:1px solid var(--sumiInk5);border-bottom:1px solid var(--sumiInk5)}
+#split:hover{background:var(--waveBlue2)}
+main:not(.split) #split,main:not(.split) .dv{display:none}
+
+/* file compare */
+.dv{flex:1;min-height:140px;display:flex;flex-direction:column;--ln:58px;--gw:46px}
+.dv-tb{flex:none;display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:4px 8px;background:var(--sumiInk1);border-bottom:1px solid var(--sumiInk4)}
+.dv-tb .ttl{font-family:var(--mono);font-size:12px;margin-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:36vw}
+.dv-tb .sep{align-self:stretch;margin:2px 4px}
+.dv-files{flex:none;display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--sumiInk4);border-bottom:1px solid var(--sumiInk4)}
+.fi{padding:3px 10px;background:var(--sumiInk2);font-size:12px;color:var(--fujiGray);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fi b{color:var(--oldWhite);font-weight:600}
+.fi .dirty{color:var(--carpYellow)} .fi .warn{color:var(--surimiOrange)}
+.dv-main{flex:1;min-height:0;display:grid;grid-template-columns:14px minmax(0,1fr)}
+.map{position:relative;background:var(--sumiInk1);border-right:1px solid var(--sumiInk4);cursor:pointer;overflow:hidden}
+.mk{position:absolute;left:2px;right:2px;min-height:2px}
+.m-c{background:var(--autumnYellow)} .m-l,.m-r{background:var(--autumnGreen)}
+.mvp{position:absolute;left:0;right:0;border:1px solid var(--fujiGray);background:rgba(220,215,186,.07);pointer-events:none}
+#dvScroll{position:relative;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;outline:none}
+.dv-rows{position:absolute;left:0;right:0;top:0}
+.dv-rows .r{display:grid;grid-template-columns:var(--ln) minmax(0,1fr) var(--gw) var(--ln) minmax(0,1fr);height:var(--lh);font:12.5px/var(--lh) var(--mono);user-select:none}
+.r.vis{position:relative}
+.r.vis::after{content:"";position:absolute;inset:0;background:color-mix(in srgb,var(--crystalBlue) 24%,transparent);pointer-events:none}
+.ln{color:var(--sumiInk6);text-align:right;padding-right:8px;border-left:3px solid transparent;user-select:none;font-size:11.5px;background:var(--sumiInk3)}
+.c{overflow:hidden;white-space:pre;tab-size:4;color:var(--fujiWhite)}
+.c .t{display:inline-block;padding:0 10px 0 6px;transform:translateX(calc(var(--sx) * -1px))}
+.cL{--sx:var(--sxL,0)} .cR{--sx:var(--sxR,0)}
+.g{display:flex;align-items:center;justify-content:center;gap:2px;background:var(--sumiInk1);border-left:1px solid var(--sumiInk4);border-right:1px solid var(--sumiInk4);user-select:none}
+.cp{width:19px;height:16px;padding:0;border:1px solid var(--sumiInk6);border-radius:3px;background:var(--sumiInk4);color:var(--carpYellow);font:12px/13px var(--font);cursor:pointer}
+.cp:hover{background:var(--waveBlue2);color:var(--fujiWhite)}
+.k-c .c{background:color-mix(in srgb,var(--waveBlue1) 55%,var(--winterBlue))}
+.k-c .ln{border-left-color:var(--autumnYellow)}
+.k-l .cL,.k-r .cR{background:var(--winterGreen)}
+.k-l .lnL,.k-r .lnR{border-left-color:var(--autumnGreen)}
+.k-l .lnR,.k-r .lnL{border-left-color:var(--autumnRed)}
+.c.fill{background:repeating-linear-gradient(-45deg,var(--winterRed) 0 3px,var(--sumiInk2) 3px 8px)}
+.c .dx{background:var(--winterYellow);border-radius:2px}
+.r.cur .g{background:var(--waveBlue1)}
+.r.cur.top>*{box-shadow:inset 0 1px 0 var(--crystalBlue)}
+.r.cur.bot>*{box-shadow:inset 0 -1px 0 var(--crystalBlue)}
+.r.cur.top.bot>*{box-shadow:inset 0 1px 0 var(--crystalBlue),inset 0 -1px 0 var(--crystalBlue)}
+.c .kw{color:var(--oniViolet)} .c .ty{color:var(--waveAqua2)} .c .st{color:var(--springGreen)} .c .qi{color:var(--carpYellow)}
+.c .fn{color:var(--crystalBlue)} .c .nu{color:var(--sakuraPink)} .c .cm{color:var(--fujiGray);font-style:italic} .c .pp{color:var(--waveRed)}
+.c .tg{color:var(--crystalBlue)} .c .at{color:var(--carpYellow)}
+/* Find: places found in the file names and in the lines */
+.c .fm,.tx .fm{background:var(--surimiOrange);color:var(--sumiInk0);border-radius:2px}
+#dvFind{width:150px;font-family:var(--mono)}
+.fnd{font-size:12px;color:var(--fujiGray);white-space:nowrap} .fnd.none{color:var(--surimiOrange)}
+.dv-hb{flex:none;display:grid;grid-template-columns:var(--ln) minmax(0,1fr) var(--gw) var(--ln) minmax(0,1fr);padding-left:14px;padding-right:var(--sbw,0px);background:var(--sumiInk1);border-top:1px solid var(--sumiInk4)}
+.hb{overflow-x:auto;overflow-y:hidden;height:12px} .hb>div{height:1px}
+#hbL{grid-column:2} #hbR{grid-column:5}
+.dv-bin{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;color:var(--fujiGray);text-align:center}
+
+/* toast */
+.toast{position:fixed;right:16px;bottom:16px;max-width:min(560px,calc(100vw - 32px));padding:8px 12px;background:var(--sumiInk4);border:1px solid var(--sumiInk6);border-left:3px solid var(--springGreen);border-radius:6px;font-size:12.5px;box-shadow:0 6px 20px rgba(0,0,0,.45);opacity:0;transform:translateY(8px);transition:opacity .15s,transform .15s;pointer-events:none;z-index:10;white-space:pre-wrap}
+.toast.show{opacity:1;transform:none}
+.toast.err{border-left-color:var(--waveRed)}
+
+/* path field, version, inline editor, cursor */
+.ver{align-self:center;margin-right:8px;font-size:12px;color:var(--fujiGray);white-space:nowrap}
+.edbox{position:absolute;z-index:2;background:var(--sumiInk0);border:1px solid var(--carpYellow);border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.edbox textarea{display:block;width:100%;margin:0;border:0;outline:none;background:transparent;color:var(--fujiWhite);font:12.5px/var(--lh) var(--mono);padding:0 6px;resize:vertical;white-space:pre;overflow:auto;tab-size:4}
+.edbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:3px 6px;border-top:1px solid var(--sumiInk5);font:11px var(--font);color:var(--fujiGray)}
+.edbar .btn{padding:1px 8px;font-size:11px}
+.r.cursor .ln{background:var(--sumiInk5);color:var(--carpYellow)}
+.r.cursor{outline:1px solid var(--sumiInk6);outline-offset:-1px}
+.c-B{color:var(--surimiOrange)}
+@media (max-width:900px){
+  .thead,.row{grid-template-columns:minmax(0,1fr) 0 0 26px minmax(0,1fr) 0 0}
+  .sz,.dt,.thead .num{display:none}
+  .pth .lbl{width:90px}
+}
+</style>
+</head>
+<body>
+<header class="tb" role="toolbar" aria-label="Folder compare">
+  <div class="brand">LazyMerge</div>
+  <button class="tbtn" id="reload" type="button" title="Read both folders again and compare, also asks for folder access again (r)"><span class="i">&#8635;</span>Reload</button>
+  <button class="tbtn" id="clearAll" type="button" title="Forget both folders, paths and labels and start over (Alt+C)"><span class="i">&#10005;</span>Clear</button>
+  <span class="sep"></span>
+  <button class="tbtn" id="fAll" type="button" aria-pressed="true" title="Show all files (a)"><span class="i">&#10033;</span>All</button>
+  <button class="tbtn" id="fDiff" type="button" aria-pressed="false" title="Show only differing files and files that exist on one side only (d)"><span class="i">&#8800;</span>Differences</button>
+  <span class="sep"></span>
+  <button class="tbtn" id="expAll" type="button" title="Expand all folders (e)"><span class="i">&#8862;</span>Expand</button>
+  <button class="tbtn" id="colAll" type="button" title="Collapse all folders (c)"><span class="i">&#8863;</span>Collapse</button>
+  <span class="sep"></span>
+  <button class="tbtn" id="copyR" type="button" title="Copy the selected file or folder from left to right (writes to disk; Alt+l while no file is open)"><span class="i">&#8594;</span>Copy</button>
+  <button class="tbtn" id="copyL" type="button" title="Copy the selected file or folder from right to left (writes to disk; Alt+h while no file is open)"><span class="i">&#8592;</span>Copy</button>
+  <span class="sep"></span>
+  <div class="flt">
+    <label>Find <input type="text" id="find" spellcheck="false" placeholder="file name" title="Show only files whose name contains this text, while you type (/). Enter goes to the list, Esc clears it. Unlike Filter, nothing is read again."></label>
+    <label>Filter <input type="text" id="include" spellcheck="false" title="File name patterns separated by ; (e.g. *.al;*.xlf). *.* = all files. Press Enter to apply."></label>
+    <label>Exclude <input type="text" id="exclude" spellcheck="false" title="File or folder names to skip, separated by ; (wildcards * and ?). Press Enter to apply."></label>
+    <label class="chk" title="Lines that differ only in spaces/tabs count as equal"><input type="checkbox" id="ignoreWs"> Ignore whitespace</label>
+  </div>
+  <span class="grow"></span>
+  <span class="ver" id="appVer" title="LazyMerge version">v0.1.14</span>
+</header>
+<div class="paths">
+  <div class="pth">
+    <button class="btn" type="button" data-pick="L" title="Pick the left folder">Left folder&hellip;</button>
+    <input type="text" class="lbl" id="lblL" spellcheck="false" aria-label="Label of the left side" title="Name of this side, used in the headers">
+    <span class="fold none" id="foldL"></span>
+  </div>
+  <div class="pth">
+    <button class="btn" type="button" data-pick="R" title="Pick the right folder">Right folder&hellip;</button>
+    <input type="text" class="lbl" id="lblR" spellcheck="false" aria-label="Label of the right side" title="Name of this side, used in the headers">
+    <span class="fold none" id="foldR"></span>
+  </div>
+</div>
+<main id="main">
+  <section class="fv" aria-label="Folder compare">
+    <div class="thead"><div id="hL">Left</div><div class="num">Size</div><div class="num">Modified</div><div></div><div id="hR">Right</div><div class="num">Size</div><div class="num">Modified</div></div>
+    <div id="tree" role="tree" tabindex="0" aria-label="Compared files"></div>
+    <div class="fv-status"><span id="fvMsg" role="status"></span><span class="grow"></span><span id="fvSum"></span></div>
+  </section>
+  <div id="split" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
+  <section class="dv" id="dv" aria-label="File compare">
+    <div class="dv-tb">
+      <span class="ttl" id="dvTitle"></span>
+      <button class="btn" id="prevH" type="button" title="Previous difference (N)">&#9664; Prev</button>
+      <button class="btn" id="nextH" type="button" title="Next difference (n)">Next &#9654;</button>
+      <input type="text" id="dvFind" spellcheck="false" placeholder="Find (/)" aria-label="Find in both files" title="Find text in both files while you type, not case-sensitive (/). Enter next, Shift+Enter previous, Esc back to the lines.">
+      <span class="fnd" id="dvFindN" role="status"></span>
+      <span class="sep"></span>
+      <button class="btn" id="secR" type="button" title="Copy the marked lines, otherwise the current section, from left to right (L)">Section &#8594;</button>
+      <button class="btn" id="secL" type="button" title="Copy the marked lines, otherwise the current section, from right to left (H)">&#8592; Section</button>
+      <button class="btn" id="allR" type="button" title="Replace the right content with the left content (Alt+l)">All &#8594;</button>
+      <button class="btn" id="allL" type="button" title="Replace the left content with the right content (Alt+h)">&#8592; All</button>
+      <button class="btn" id="edL" type="button" title="Edit the marked lines, otherwise the current section, on the left (i, or double-click any line)">&#9998; Left</button>
+      <button class="btn" id="edR" type="button" title="Edit the marked lines, otherwise the current section, on the right (I, or double-click any line)">&#9998; Right</button>
+      <button class="btn" id="undo" type="button" title="Undo the last change (u)">Undo</button>
+      <span class="sep"></span>
+      <button class="btn" id="saveL" type="button" title="Write the left side to disk (Alt+S saves both); green = unsaved changes">Save left</button>
+      <button class="btn" id="saveR" type="button" title="Write the right side to disk (Alt+S saves both); green = unsaved changes">Save right</button>
+      <span class="sep"></span>
+      <button class="btn" id="dvReload" type="button" title="Read both files again from disk (r)">Reload</button>
+      <button class="btn" id="dvClose" type="button" title="Close the file compare (Esc)">Close</button>
+    </div>
+    <div class="dv-files"><div class="fi" id="fiL"></div><div class="fi" id="fiR"></div></div>
+    <div class="dv-main" id="dvMain">
+      <div class="map" id="map" title="Overview - click to jump"><div id="mapMarks"></div><div class="mvp" id="mapVp"></div></div>
+      <div id="dvScroll" tabindex="0" aria-label="Line compare"><div id="dvSpacer"></div><div class="dv-rows" id="dvRows"></div></div>
+    </div>
+    <div class="dv-bin" id="dvBin" hidden>Binary file or not readable as text. Use Copy &#8594; / &#8592; Copy in the toolbar to copy the whole file.</div>
+    <div class="dv-hb" id="dvHb"><div class="hb" id="hbL"><div></div></div><div class="hb" id="hbR"><div></div></div></div>
+    <div class="dv-status"><span id="dvInfo"></span><span class="grow"></span><span>n / N next / previous &middot; / find &middot; v mark lines &middot; L / H copy &#8594; / &#8592; &middot; Alt+l / Alt+h whole file &middot; i / I edit &middot; u undo &middot; r reload &middot; Alt+S save &middot; Esc close</span></div>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+// Pure logic without DOM access: encoding, line diff, highlighting, folder walk and compare.
+var LM = (function () {
+  'use strict';
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // --- Encoding --------------------------------------------------------------
+
+  function splitText(text) {
+    var finalNl = /(\r\n|\n|\r)$/.test(text);
+    var lines = text.length ? text.split(/\r\n|\n|\r/) : [];
+    if (finalNl) lines.pop();
+    return { lines: lines, finalNl: finalNl };
+  }
+
+  // Bytes -> lines plus everything needed to write the file back the same way
+  function decode(u8) {
+    var r = { binary: false, bom: false, enc: 'UTF-8', eol: '\r\n', finalNl: true, lines: [], readonly: false };
+    var text;
+    if (u8.length >= 2 && ((u8[0] === 0xFF && u8[1] === 0xFE) || (u8[0] === 0xFE && u8[1] === 0xFF))) {
+      text = new TextDecoder(u8[0] === 0xFF ? 'utf-16le' : 'utf-16be').decode(u8.subarray(2));
+      r.enc = 'UTF-16';
+      r.readonly = true;
+    } else {
+      for (var i = 0, n = Math.min(u8.length, 8000); i < n; i++) {
+        if (u8[i] === 0) { r.binary = true; r.readonly = true; return r; }
+      }
+      r.bom = u8.length >= 3 && u8[0] === 0xEF && u8[1] === 0xBB && u8[2] === 0xBF;
+      var body = r.bom ? u8.subarray(3) : u8;
+      try {
+        text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body);
+      } catch (e) {
+        // Saving is only implemented for UTF-8, so other encodings stay read-only
+        text = new TextDecoder('windows-1252').decode(body);
+        r.enc = 'Windows-1252';
+        r.readonly = true;
+      }
+    }
+    var crlf = (text.match(/\r\n/g) || []).length;
+    var lf = (text.match(/\n/g) || []).length - crlf;
+    r.eol = lf > crlf ? '\n' : '\r\n';
+    var s = splitText(text);
+    r.lines = s.lines;
+    r.finalNl = s.finalNl || !text.length;
+    return r;
+  }
+
+  // A side that does not exist yet takes line ending, BOM and final newline from the other side
+  function joinLines(fs, other) {
+    var ref = fs.exists || !other || !other.exists ? fs : other;
+    var eol = ref.eol || '\r\n';
+    return fs.lines.join(eol) + (fs.lines.length && ref.finalNl ? eol : '');
+  }
+  function encode(fs, other) {
+    var ref = fs.exists || !other || !other.exists ? fs : other;
+    var body = new TextEncoder().encode(joinLines(fs, other));
+    if (!ref.bom) return body;
+    var out = new Uint8Array(body.length + 3);
+    out.set([0xEF, 0xBB, 0xBF]);
+    out.set(body, 3);
+    return out;
+  }
+
+  // --- Name patterns ---------------------------------------------------------
+
+  // 'a*;*.xlf' -> function(name) (case-insensitive, *.* = everything)
+  function globTester(list) {
+    var rx = String(list || '').split(/[;,]/).map(function (p) { return p.trim(); }).filter(Boolean).map(function (p) {
+      if (p === '*.*') p = '*';
+      return new RegExp('^' + p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+    });
+    var fn = function (name) { return rx.some(function (r) { return r.test(name); }); };
+    fn.empty = rx.length === 0;
+    return fn;
+  }
+
+  // --- Line diff -------------------------------------------------------------
+
+  function normWs(s) { return s.replace(/\s+/g, ' ').trim(); }
+
+  // Same line text -> same number, across all given arrays
+  function toIds(arrays, norm) {
+    var map = new Map(), next = 0;
+    function id(s) {
+      if (norm) s = norm(s);
+      var v = map.get(s);
+      if (v === undefined) { v = next++; map.set(s, v); }
+      return v;
+    }
+    return arrays.map(function (x) { return x.map(id); });
+  }
+
+  // Patience diff: lines that are unique on both sides are anchors; gaps without
+  // anchors fall back to a DP LCS (or count as one changed block when too large).
+  // Returns the matched index pairs [i, j] in ascending order.
+  function matchLines(a, b) {
+    var out = [];
+    rec(0, a.length, 0, b.length);
+    return out;
+
+    function rec(a0, a1, b0, b1) {
+      while (a0 < a1 && b0 < b1 && a[a0] === b[b0]) out.push([a0++, b0++]);
+      var tail = [];
+      while (a1 > a0 && b1 > b0 && a[a1 - 1] === b[b1 - 1]) tail.push([--a1, --b1]);
+      if (a0 < a1 && b0 < b1) {
+        var anchors = patience(a0, a1, b0, b1);
+        if (anchors.length) {
+          var pa = a0, pb = b0;
+          for (var k = 0; k < anchors.length; k++) {
+            rec(pa, anchors[k][0], pb, anchors[k][1]);
+            out.push(anchors[k]);
+            pa = anchors[k][0] + 1;
+            pb = anchors[k][1] + 1;
+          }
+          rec(pa, a1, pb, b1);
+        } else if ((a1 - a0) * (b1 - b0) <= 4000000) {
+          lcs(a0, a1, b0, b1);
+        }
+      }
+      for (var t = tail.length - 1; t >= 0; t--) out.push(tail[t]);
+    }
+
+    function patience(a0, a1, b0, b1) {
+      var ca = new Map(), cb = new Map(), i;
+      for (i = a0; i < a1; i++) ca.set(a[i], ca.has(a[i]) ? -1 : i);
+      for (i = b0; i < b1; i++) cb.set(b[i], cb.has(b[i]) ? -1 : i);
+      var seq = [];
+      for (i = a0; i < a1; i++) {
+        if (ca.get(a[i]) !== i) continue;
+        var j = cb.get(a[i]);
+        if (j !== undefined && j >= 0) seq.push([i, j]);
+      }
+      // longest increasing subsequence of the b indices
+      var tops = [], prev = new Array(seq.length);
+      for (var k = 0; k < seq.length; k++) {
+        var lo = 0, hi = tops.length;
+        while (lo < hi) { var mid = (lo + hi) >> 1; if (seq[tops[mid]][1] < seq[k][1]) lo = mid + 1; else hi = mid; }
+        prev[k] = lo > 0 ? tops[lo - 1] : -1;
+        tops[lo] = k;
+      }
+      var res = [];
+      for (var p = tops.length ? tops[tops.length - 1] : -1; p >= 0; p = prev[p]) res.push(seq[p]);
+      return res.reverse();
+    }
+
+    function lcs(a0, a1, b0, b1) {
+      var n = a1 - a0, m = b1 - b0, w = m + 1, T = new Uint32Array((n + 1) * w), i, j;
+      for (i = n - 1; i >= 0; i--) {
+        for (j = m - 1; j >= 0; j--) {
+          T[i * w + j] = a[a0 + i] === b[b0 + j] ? T[(i + 1) * w + j + 1] + 1 : Math.max(T[(i + 1) * w + j], T[i * w + j + 1]);
+        }
+      }
+      i = 0; j = 0;
+      while (i < n && j < m) {
+        if (a[a0 + i] === b[b0 + j]) { out.push([a0 + i, b0 + j]); i++; j++; }
+        else if (T[(i + 1) * w + j] >= T[i * w + j + 1]) i++;
+        else j++;
+      }
+    }
+  }
+
+  // Aligned rows for the side-by-side view plus the difference sections (hunks).
+  // Row kinds: e = equal, c = changed on both sides, l = only left, r = only right.
+  // Hunk: rows [r0, r1), left lines [a0, a1), right lines [b0, b1).
+  function diffLines(a, b, ignoreWs) {
+    var ids = toIds([a, b], ignoreWs ? normWs : null);
+    var m = matchLines(ids[0], ids[1]);
+    var rows = [], hunks = [], pi = 0, pj = 0;
+    function gap(i1, j1) {
+      var n = i1 - pi, k = j1 - pj;
+      if (!n && !k) return;
+      var h = { r0: rows.length, r1: 0, a0: pi, a1: i1, b0: pj, b1: j1, kind: n && k ? 'c' : n ? 'l' : 'r' };
+      for (var x = 0; x < Math.max(n, k); x++) {
+        rows.push({ l: x < n ? pi + x : -1, r: x < k ? pj + x : -1, k: x < n && x < k ? 'c' : x < n ? 'l' : 'r', h: hunks.length });
+      }
+      h.r1 = rows.length;
+      hunks.push(h);
+    }
+    for (var i = 0; i < m.length; i++) {
+      gap(m[i][0], m[i][1]);
+      rows.push({ l: m[i][0], r: m[i][1], k: 'e', h: -1 });
+      pi = m[i][0] + 1;
+      pj = m[i][1] + 1;
+    }
+    gap(a.length, b.length);
+    return { rows: rows, hunks: hunks };
+  }
+
+  function addRange(r, s, e) {
+    if (r.length && r[r.length - 1][1] === s) r[r.length - 1][1] = e; else r.push([s, e]);
+  }
+  function edgeDiff(x, y) {
+    var p = 0, n = Math.min(x.length, y.length);
+    while (p < n && x[p] === y[p]) p++;
+    var s = 0;
+    while (s < n - p && x[x.length - 1 - s] === y[y.length - 1 - s]) s++;
+    return { a: p < x.length - s ? [[p, x.length - s]] : [], b: p < y.length - s ? [[p, y.length - s]] : [] };
+  }
+
+  // Changed character ranges within a changed line pair, word-based
+  var TOK_RE = /\w+|\s+|[^\w\s]/g;
+  function inlineDiff(x, y) {
+    if (x.length > 3000 || y.length > 3000) return edgeDiff(x, y);
+    var ta = x.match(TOK_RE) || [], tb = y.match(TOK_RE) || [];
+    var n = ta.length, m = tb.length;
+    if (n * m > 160000) return edgeDiff(x, y);
+    var w = m + 1, T = new Uint16Array((n + 1) * w), i, j;
+    for (i = n - 1; i >= 0; i--) {
+      for (j = m - 1; j >= 0; j--) {
+        T[i * w + j] = ta[i] === tb[j] ? T[(i + 1) * w + j + 1] + 1 : Math.max(T[(i + 1) * w + j], T[i * w + j + 1]);
+      }
+    }
+    var ra = [], rb = [], pa = 0, pb = 0;
+    i = 0; j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && ta[i] === tb[j]) { pa += ta[i].length; pb += tb[j].length; i++; j++; }
+      else if (j >= m || (i < n && T[(i + 1) * w + j] >= T[i * w + j + 1])) { addRange(ra, pa, pa + ta[i].length); pa += ta[i].length; i++; }
+      else { addRange(rb, pb, pb + tb[j].length); pb += tb[j].length; j++; }
+    }
+    return { a: ra, b: rb };
+  }
+
+
+
+
+  // --- Syntax highlighting (AL, XML) -----------------------------------------
+
+  var AL_KW = new Set(('begin end if then else case of for to downto do while repeat until exit with var local procedure trigger ' +
+    'internal protected and or not xor div mod in true false codeunit table tableextension page pageextension report ' +
+    'reportextension query xmlport enum enumextension interface permissionset permissionsetextension profile controladdin ' +
+    'entitlement dotnet assembly type field fields key keys fieldgroup fieldgroups area group part action actions layout ' +
+    'repeater systempart usercontrol column dataitem dataset requestpage labels elements schema textelement tableelement ' +
+    'fieldelement fieldattribute textattribute event implements extends foreach asserterror record value modify addafter ' +
+    'addbefore addfirst addlast movefirst movelast moveafter movebefore views view').split(' '));
+  var AL_TY = new Set(('integer decimal boolean text code date time datetime duration guid option biginteger byte char blob ' +
+    'media mediaset recordid recordref fieldref keyref jsonobject jsonarray jsontoken jsonvalue httpclient httpcontent ' +
+    'httprequestmessage httpresponsemessage httpheaders instream outstream list dictionary label errorinfo notification ' +
+    'dialog textbuilder xmldocument xmlelement xmlnode xmlattribute secrettext variant').split(' '));
+  var AL_RE = /\/\/.*|\/\*|'(?:[^']|'')*'?|"[^"]*"?|\b\d+(?:\.\d+)?\b|[A-Za-z_]\w*/g;
+  var XML_RE = /<!--|<\/?[A-Za-z_][\w:.-]*|\/?>|[A-Za-z_][\w:.-]*(?=\s*=)|"[^"]*"?/g;
+
+  function langOf(name) {
+    var m = /\.([^.\/\\]+)$/.exec(name || '');
+    var e = m ? m[1].toLowerCase() : '';
+    if (e === 'al') return 'al';
+    if (/^(xml|xlf|rdlc|rdl|xsd|config|csproj|props|targets|resx)$/.test(e)) return 'xml';
+    return null;
+  }
+
+  // Tokens [start, end, class] of one line; inC = line starts inside a block comment
+  function hl(s, lang, inC) {
+    var toks = [], i = 0, n = s.length, m, e;
+    if (lang === 'al') {
+      if (inC) {
+        e = s.indexOf('*/');
+        if (e < 0) return { toks: [[0, n, 'cm']], inC: true };
+        toks.push([0, e + 2, 'cm']);
+        i = e + 2;
+      } else if (/^\s*#/.test(s)) {
+        return { toks: [[0, n, 'pp']], inC: false };
+      }
+      AL_RE.lastIndex = i;
+      while ((m = AL_RE.exec(s))) {
+        var t = m[0], p = m.index, c = t.charAt(0), cls = '';
+        if (t === '/*') {
+          e = s.indexOf('*/', p + 2);
+          if (e < 0) { toks.push([p, n, 'cm']); return { toks: toks, inC: true }; }
+          toks.push([p, e + 2, 'cm']);
+          AL_RE.lastIndex = e + 2;
+          continue;
+        }
+        if (c === '/') cls = 'cm';
+        else if (c === "'") cls = 'st';
+        else if (c === '"') cls = 'qi';
+        else if (c >= '0' && c <= '9') cls = 'nu';
+        else {
+          var lw = t.toLowerCase();
+          cls = AL_KW.has(lw) ? 'kw' : AL_TY.has(lw) ? 'ty' : /^\s*\(/.test(s.slice(p + t.length, p + t.length + 16)) ? 'fn' : '';
+        }
+        if (cls) toks.push([p, p + t.length, cls]);
+      }
+      return { toks: toks, inC: false };
+    }
+    if (lang === 'xml') {
+      if (inC) {
+        e = s.indexOf('-->');
+        if (e < 0) return { toks: [[0, n, 'cm']], inC: true };
+        toks.push([0, e + 3, 'cm']);
+        i = e + 3;
+      }
+      XML_RE.lastIndex = i;
+      while ((m = XML_RE.exec(s))) {
+        var x = m[0], q = m.index;
+        if (x === '<!--') {
+          e = s.indexOf('-->', q + 4);
+          if (e < 0) { toks.push([q, n, 'cm']); return { toks: toks, inC: true }; }
+          toks.push([q, e + 3, 'cm']);
+          XML_RE.lastIndex = e + 3;
+        } else {
+          toks.push([q, q + x.length, x.charAt(0) === '<' || x.charAt(x.length - 1) === '>' ? 'tg' : x.charAt(0) === '"' ? 'st' : 'at']);
+        }
+      }
+      return { toks: toks, inC: false };
+    }
+    return { toks: toks, inC: false };
+  }
+
+  // Block-comment state at the start of every line (1 = inside a comment)
+  function hlStates(lines, lang) {
+    var st = new Uint8Array(lines.length), inC = false;
+    if (!lang) return st;
+    for (var i = 0; i < lines.length; i++) {
+      st[i] = inC ? 1 : 0;
+      if (lines[i].length <= 3000) inC = hl(lines[i], lang, inC).inC;
+    }
+    return st;
+  }
+
+  // HTML for one line: syntax tokens plus changed ranges (class dx) and found places (class fm, optional)
+  function paint(s, toks, ranges, marks) {
+    marks = marks || [];
+    if (!toks.length && !ranges.length && !marks.length) return esc(s);
+    var cuts = [0, s.length], i;
+    for (i = 0; i < toks.length; i++) cuts.push(toks[i][0], toks[i][1]);
+    for (i = 0; i < ranges.length; i++) cuts.push(ranges[i][0], ranges[i][1]);
+    for (i = 0; i < marks.length; i++) cuts.push(marks[i][0], marks[i][1]);
+    cuts.sort(function (x, y) { return x - y; });
+    var html = '', ti = 0, ri = 0, mi = 0;
+    for (i = 0; i < cuts.length - 1; i++) {
+      var p = cuts[i], q = cuts[i + 1];
+      if (p >= q) continue;
+      while (ti < toks.length && toks[ti][1] <= p) ti++;
+      while (ri < ranges.length && ranges[ri][1] <= p) ri++;
+      while (mi < marks.length && marks[mi][1] <= p) mi++;
+      var cls = ti < toks.length && toks[ti][0] <= p ? toks[ti][2] : '';
+      if (ri < ranges.length && ranges[ri][0] <= p) cls += (cls ? ' ' : '') + 'dx';
+      if (mi < marks.length && marks[mi][0] <= p) cls += (cls ? ' ' : '') + 'fm';
+      var t = esc(s.slice(p, q));
+      html += cls ? '<span class="' + cls + '">' + t + '</span>' : t;
+    }
+    return html;
+  }
+
+  // Places of term in s as [start, end), not case-sensitive, plain text (Find)
+  function findIn(s, term) {
+    var out = [], t = term.toLowerCase(), n = t.length, low = s.toLowerCase(), i;
+    if (!n) return out;
+    if (low.length !== s.length) {   // a few characters change their length in lower case: compare in place
+      for (i = 0; i + n <= s.length; i++) if (s.substr(i, n).toLowerCase() === t) { out.push([i, i + n]); i += n - 1; }
+      return out;
+    }
+    for (i = low.indexOf(t); i >= 0; i = low.indexOf(t, i + n)) out.push([i, i + n]);
+    return out;
+  }
+
+  // --- Folder walk and compare -----------------------------------------------
+
+  function sameBytes(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  // same = identical bytes, minor = only BOM / line endings / (optionally) whitespace differ
+  function classify(a, b, ignoreWs) {
+    if (sameBytes(a, b)) return 'same';
+    var x = decode(a), y = decode(b);
+    if (x.binary || y.binary || x.lines.length !== y.lines.length) return 'diff';
+    for (var i = 0; i < x.lines.length; i++) {
+      var p = x.lines[i], q = y.lines[i];
+      if (p !== q && (!ignoreWs || normWs(p) !== normWs(q))) return 'diff';
+    }
+    return 'minor';
+  }
+
+  function newNode(name, path, isDir, parent) {
+    return { name: name, path: path, isDir: isDir, parent: parent, kids: isDir ? new Map() : null, L: null, R: null, st: 'pending', err: '' };
+  }
+
+  async function walk(dir, node, side, opt) {
+    for await (var entry of dir.values()) {
+      var isDir = entry.kind === 'directory';
+      if (opt.exclude(entry.name)) continue;
+      if (!isDir && !opt.include(entry.name)) continue;
+      var key = (isDir ? 'd:' : 'f:') + entry.name.toLowerCase();   // Windows paths are case-insensitive
+      var child = node.kids.get(key);
+      if (!child) {
+        child = newNode(entry.name, node.path ? node.path + '/' + entry.name : entry.name, isDir, node);
+        node.kids.set(key, child);
+      }
+      child[side] = { name: entry.name, handle: entry, size: null, mtime: null };
+      if (isDir) await walk(entry, child, side, opt);
+    }
+  }
+
+  // One tree for both sides; opt = { include: fn(name), exclude: fn(name) }
+  async function buildTree(hL, hR, opt) {
+    var root = newNode('', '', true, null);
+    root.L = { name: hL.name, handle: hL };
+    root.R = { name: hR.name, handle: hR };
+    await Promise.all([walk(hL, root, 'L', opt), walk(hR, root, 'R', opt)]);
+    return root;
+  }
+
+
+  function files(node, out) {
+    out = out || [];
+    node.kids.forEach(function (k) { if (k.isDir) files(k, out); else out.push(k); });
+    return out;
+  }
+
+  async function readEntry(e) {
+    var f = await e.handle.getFile();
+    e.size = f.size;
+    e.mtime = f.lastModified;
+    return f;
+  }
+
+  async function compareFile(n, ignoreWs) {
+    try {
+      if (!n.L || !n.R) {
+        await readEntry(n.L || n.R);
+        n.st = n.L ? 'left' : 'right';
+        return;
+      }
+      var fl = await readEntry(n.L), fr = await readEntry(n.R);
+      n.st = classify(new Uint8Array(await fl.arrayBuffer()), new Uint8Array(await fr.arrayBuffer()), ignoreWs);
+      n.err = '';
+    } catch (e) {
+      n.st = 'error';
+      n.err = e.message || String(e);
+    }
+  }
+
+  function aggregate(n) {
+    if (!n.isDir) return n.st;
+    var diff = false, pend = false, minor = false;
+    n.kids.forEach(function (k) {
+      var s = aggregate(k);
+      if (s === 'pending') pend = true;
+      else if (s === 'minor') minor = true;
+      else if (s !== 'same') diff = true;
+    });
+    if (n.parent && (!n.L || !n.R)) n.st = n.L ? 'left' : 'right';
+    else n.st = diff ? 'diff' : pend ? 'pending' : minor ? 'minor' : 'same';
+    return n.st;
+  }
+
+  // Path segments of a node on one side (names as they exist there, otherwise the node name)
+  function sideParts(n, side) {
+    var p = [];
+    for (var x = n; x && x.parent; x = x.parent) p.unshift(x[side] ? x[side].name : x.name);
+    return p;
+  }
+
+  async function writeFile(root, parts, bytes) {
+    var dir = root;
+    for (var i = 0; i < parts.length - 1; i++) dir = await dir.getDirectoryHandle(parts[i], { create: true });
+    var fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+    var w = await fh.createWritable();
+    try {
+      await w.write(bytes);
+      await w.close();
+    } catch (e) {
+      try { await w.abort(); } catch (e2) { /* ignore */ }
+      throw e;
+    }
+    return fh;
+  }
+
+  async function pool(items, n, fn) {
+    var i = 0;
+    var workers = Array.from({ length: Math.min(n, items.length) }, async function () {
+      while (i < items.length) { var k = i++; await fn(items[k], k); }
+    });
+    await Promise.all(workers);
+  }
+
+  return {
+    esc: esc, splitText: splitText, decode: decode, joinLines: joinLines, encode: encode, globTester: globTester,
+    normWs: normWs, diffLines: diffLines, inlineDiff: inlineDiff,
+    langOf: langOf, hl: hl, hlStates: hlStates, paint: paint, findIn: findIn,
+    classify: classify, buildTree: buildTree, files: files, compareFile: compareFile, aggregate: aggregate,
+    sideParts: sideParts, writeFile: writeFile, pool: pool
+  };
+})();
+</script>
+
+<script>
+(function () {
+  'use strict';
+  var CFG = {
+    parallel: 8,               // concurrent file reads while comparing
+    lh: 18,                    // row height of the file compare in px, must match --lh
+    diskMs: 3000,              // how often the open files are checked for changes made outside the page
+    scrollOff: 7,              // rows kept visible above and below the cursor row (vim scrolloff)
+    maxUndo: 100
+  };
+  var DEFAULTS = {
+    include: '*.*',
+    exclude: '.git;.alpackages;.vs;node_modules',
+    ignoreWs: false,
+    filter: 'all',
+    labelL: '',
+    labelR: '',
+    fvh: 0,
+  };
+  var KEY = 'lazymerge:opts';
+  var OTHER = { L: 'R', R: 'L' };
+  var SIDE = { L: 'left', R: 'right' };
+  var MID = { same: '', minor: '&#8776;', diff: '&#8800;', left: '', right: '', pending: '&hellip;', error: '!' };
+  var TIP = {
+    same: 'Identical', minor: 'Only line endings, BOM or whitespace differ', diff: 'Different',
+    left: 'Only on the left', right: 'Only on the right', pending: 'Not compared yet', error: 'Read error'
+  };
+  var ICON_DIR = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 3h4.3l1.6 1.6h7.1v8.9h-13z"/></svg>';
+  var ICON_FILE = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M3.5 1.6h5.8l3.2 3.2v9.6h-9z M9.3 1.6v3.2h3.2"/></svg>';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = LM.esc;
+  var opts = Object.assign({}, DEFAULTS, loadJson(KEY, {}));
+  var sides = { L: null, R: null };          // FileSystemDirectoryHandle per side
+  var root = null, index = new Map(), vis = [], expanded = new Set(), selPath = null;
+  var scanGen = 0, scanning = false, firstScan = true;
+  var view = null;                            // open file compare
+  var editing = null;                         // open inline editor
+  var charW = 7.6;
+
+  function loadJson(k, d) {
+    try { var s = localStorage.getItem(k); return s ? JSON.parse(s) : d; } catch (e) { return d; }
+  }
+  function saveOpts() {
+    try { localStorage.setItem(KEY, JSON.stringify(opts)); } catch (e) { /* storage unavailable or full */ }
+  }
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  function fmtDate(ms) {
+    var d = new Date(ms);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  function fmtSize(n) { return Number(n).toLocaleString(); }
+  function label(s) { return opts['label' + s] || (sides[s] ? sides[s].name : SIDE[s]); }
+  function setStatus(msg, cls) { var s = $('fvMsg'); s.textContent = msg; s.className = cls || ''; }
+
+  var toastTimer = null;
+  function toast(msg, cls) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'toast show' + (cls ? ' ' + cls : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.className = 'toast'; }, cls === 'err' ? 7000 : 3500);
+  }
+  function copyText(text, okMsg) {
+    var done = function () { toast(okMsg); };
+    var fail = function () { window.prompt('Copy this:', text); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fail); else fail();
+  }
+
+  // --- Folder handles (IndexedDB, so the folders survive a page reload) ------
+
+  function idb(mode, fn) {
+    return new Promise(function (resolve, reject) {
+      var open = indexedDB.open('lazymerge', 1);
+      open.onupgradeneeded = function () { open.result.createObjectStore('handles'); };
+      open.onerror = function () { reject(open.error); };
+      open.onsuccess = function () {
+        var db = open.result, tx = db.transaction('handles', mode), req = fn(tx.objectStore('handles'));
+        tx.oncomplete = function () { db.close(); resolve(req.result); };
+        tx.onerror = tx.onabort = function () { db.close(); reject(tx.error); };
+      };
+    });
+  }
+  function storeHandle(side, h) {
+    return idb('readwrite', function (st) { return st.put(h, side); }).catch(function () { /* not persisted */ });
+  }
+  function loadHandle(side) {
+    return idb('readonly', function (st) { return st.get(side); }).catch(function () { return null; });
+  }
+  function forgetHandles() {
+    return idb('readwrite', function (st) { return st.clear(); }).catch(function () { /* nothing stored */ });
+  }
+
+  // requestPermission needs a user gesture; without one only an existing grant counts
+  async function ensurePerm(h, interactive) {
+    var o = { mode: 'readwrite' };
+    try {
+      if ((await h.queryPermission(o)) === 'granted') return true;
+      return interactive ? (await h.requestPermission(o)) === 'granted' : false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+
+  async function pick(side) {
+    try {
+      var h = await window.showDirectoryPicker({ id: 'lazymerge-' + side, mode: 'readwrite' });
+      if (!(await closeView())) return;
+      sides[side] = h;
+      storeHandle(side, h);
+      expanded.clear();
+      firstScan = true;
+      renderPaths();
+      if (sides[OTHER[side]]) scan(true);
+      else { root = null; renderTree(); setStatus('Now pick the ' + SIDE[OTHER[side]] + ' folder.', 'hint'); }
+    } catch (e) {
+      if (e.name !== 'AbortError') setStatus('Folder: ' + e.message, 'err');
+    }
+  }
+
+  // Back to the start: no folders, paths, labels, results or open file (filters and the other settings stay)
+  async function clearAll() {
+    if ((sides.L || sides.R || view) && !confirm('Clear both folders and their labels and start over?')) return;
+    if (!(await closeView())) return;
+    scanGen++;
+    scanning = false;
+    sides = { L: null, R: null };
+    root = null;
+    index = new Map();
+    vis = [];
+    expanded.clear();
+    selPath = null;
+    firstScan = true;
+    opts.labelL = opts.labelR = '';
+    saveOpts();
+    forgetHandles();
+    renderPaths();
+    renderTree();
+    setStatus('Cleared. Pick a left and a right folder.', 'hint');
+  }
+
+  // --- Folder compare ---------------------------------------------------------
+
+  function includeTester() {
+    var t = LM.globTester(opts.include);
+    return t.empty ? function () { return true; } : t;
+  }
+
+  async function scan(interactive) {
+    if (!sides.L || !sides.R) { setStatus('Pick a left and a right folder.', 'hint'); return; }
+    var gen = ++scanGen;
+    // Folder access of the browser
+    for (var s of ['L', 'R']) {
+      if (!(await ensurePerm(sides[s], interactive))) {
+        if (gen === scanGen) setStatus('No access to the ' + SIDE[s] + ' folder "' + sides[s].name + '". Click Reload to allow it.', 'hint');
+        return;
+      }
+    }
+    scanning = true;
+    updateButtons();
+    setStatus('Reading folders …');
+    var t0 = Date.now();
+    try {
+      var all = await scanLocal(gen);
+      if (!all || gen !== scanGen) return;
+      LM.aggregate(root);
+      if (firstScan) { expandDiffs(root); firstScan = false; }
+      renderTree();
+      var errs = all.filter(function (n) { return n.st === 'error'; }).length;
+      setStatus('Compared ' + all.length + ' files in ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s' +
+                (errs ? ' · ' + errs + ' could not be read' : ''), errs ? 'err' : '');
+      if (view) {
+        var n = index.get(view.path);
+        if (n && !anyDirty()) await openFile(n, true);
+        else if (n) view.node = n;
+      }
+    } catch (e) {
+      if (gen === scanGen) setStatus('Error: ' + e.message, 'err');
+    } finally {
+      if (gen === scanGen) { scanning = false; updateButtons(); }
+    }
+  }
+  // Both folders walked in the browser, then compared file by file (progress in the status line); null when outdated
+  async function scanLocal(gen) {
+    var tree = await LM.buildTree(sides.L, sides.R, { include: includeTester(), exclude: LM.globTester(opts.exclude) });
+    if (gen !== scanGen) return null;
+    root = tree;
+    rebuildIndex();
+    var all = LM.files(root), done = 0, last = 0;
+    renderTree();
+    await LM.pool(all, CFG.parallel, async function (n) {
+      if (gen !== scanGen) return;
+      await LM.compareFile(n, opts.ignoreWs);
+      done++;
+      if (Date.now() - last > 300) {
+        last = Date.now();
+        LM.aggregate(root);
+        renderTree();
+        setStatus('Comparing ' + done + ' / ' + all.length + ' …');
+      }
+    });
+    return all;
+  }
+
+  function rebuildIndex() {
+    index = new Map();
+    (function add(n) {
+      n.kids.forEach(function (k) { index.set(k.path, k); if (k.isDir) add(k); });
+    })(root);
+  }
+  function expandDiffs(n) {
+    n.kids.forEach(function (k) {
+      if (k.isDir && k.st !== 'same' && k.st !== 'minor') { expanded.add(k.path); expandDiffs(k); }
+    });
+  }
+  function isDiff(st) { return st !== 'same' && st !== 'minor'; }
+  function sortedKids(n) {
+    return Array.from(n.kids.values()).sort(function (x, y) {
+      return (y.isDir - x.isDir) || x.name.localeCompare(y.name, undefined, { sensitivity: 'base' });
+    });
+  }
+
+  function renderTree() {
+    var tree = $('tree');
+    renderSummary();
+    if (!root) {
+      vis = [];
+      tree.innerHTML = '<div class="empty">' + startText() + '</div>';
+      updateButtons();
+      return;
+    }
+    vis = [];
+    var q = findQ();
+    // Find: only files whose name contains the text, and their folders (shown open, the own open / closed state stays)
+    (function add(n, d) {
+      var any = false;
+      sortedKids(n).forEach(function (k) {
+        if (opts.filter === 'diff' && !isDiff(k.st)) return;
+        var at = vis.length;
+        vis.push({ n: k, d: d });
+        if (!q) { if (k.isDir && expanded.has(k.path)) add(k, d + 1); }
+        else if (k.isDir ? !add(k, d + 1) : !LM.findIn(k.name, q).length) { vis.length = at; return; }
+        any = true;
+      });
+      return any;
+    })(root, 0);
+    tree.innerHTML = vis.length ? vis.map(treeRow).join('')
+      : '<div class="empty">' + (q ? 'No file name contains "' + esc(q) + '"' + (opts.filter === 'diff' ? ' among the differences' : '') + ' (Esc in Find clears it).'
+        : opts.filter === 'diff' && root.kids.size ? 'No differences.' : 'No files (check Filter / Exclude).') + '</div>';
+    updateButtons();
+  }
+  function findQ() { return $('find').value.trim(); }
+  // What to do while no folders are compared
+  function startText() {
+    if (!window.showDirectoryPicker) {
+      return '<b>This browser has no File System Access API.</b><br>' +
+        'Open the page in Microsoft Edge or Google Chrome.';
+    }
+    var t = 'Pick a <b>left</b> and a <b>right</b> folder above.<br>Both are read and written with the folder access your browser grants (Edge / Chrome).';
+    return t;
+  }
+
+  function treeRow(v) {
+    var n = v.n, open = n.isDir && (expanded.has(n.path) || !!findQ()), sel = n.path === selPath;
+    return '<div class="row ' + (n.isDir ? 'dir' : 'file') + ' st-' + n.st + (sel ? ' sel' : '') + '" data-p="' + esc(n.path) + '" role="treeitem"' +
+      ' aria-level="' + (v.d + 1) + '" aria-selected="' + sel + '"' + (n.isDir ? ' aria-expanded="' + open + '"' : '') + '>' +
+      sideCells(n, 'L', v.d, open) +
+      '<div class="mid" title="' + esc(n.err || TIP[n.st]) + '">' + MID[n.st] + '</div>' +
+      sideCells(n, 'R', v.d, open) + '</div>';
+  }
+  function sideCells(n, s, d, open) {
+    var e = n[s];
+    if (!e) return '<div class="nm ' + s + '" style="--d:' + d + '"></div><div class="sz"></div><div class="dt"></div>';
+    return '<div class="nm ' + s + '" style="--d:' + d + '"><span class="tw">' + (n.isDir ? (open ? '&#9662;' : '&#9656;') : '') + '</span>' +
+      (n.isDir ? ICON_DIR : ICON_FILE) + '<span class="tx" title="' + esc(n.path) + '">' + (n.isDir ? esc(e.name) : LM.paint(e.name, [], [], LM.findIn(e.name, findQ()))) + '</span></div>' +
+      '<div class="sz">' + (n.isDir || e.size == null ? '' : fmtSize(e.size)) + '</div>' +
+      '<div class="dt">' + (e.mtime ? fmtDate(e.mtime) : '') + '</div>';
+  }
+
+  function renderSummary() {
+    if (!root) { $('fvSum').textContent = ''; return; }
+    var c = { diff: 0, left: 0, right: 0, minor: 0, same: 0 }, total = 0;
+    index.forEach(function (n) { if (!n.isDir) { total++; if (c[n.st] !== undefined) c[n.st]++; } });
+    $('fvSum').innerHTML = total + ' files · <b class="c-diff">' + c.diff + ' different</b> · <b class="c-left">' + c.left + ' only left</b> · ' +
+      '<b class="c-right">' + c.right + ' only right</b>' + (c.minor ? ' · <b class="c-minor">' + c.minor + ' minor</b>' : '') + ' · ' + c.same + ' identical';
+  }
+
+  // The browser only knows the folder name, not its path
+  function renderPaths() {
+    ['L', 'R'].forEach(function (s) {
+      var h = sides[s], f = $('fold' + s);
+      f.textContent = h ? h.name : 'no folder selected';
+      f.className = 'fold' + (h ? '' : ' none');
+      f.title = h ? 'Folder "' + h.name + '" (the browser does not reveal the full path)' : '';
+      $('lbl' + s).placeholder = h ? h.name : s === 'L' ? 'Label, e.g. Cloud' : 'Label, e.g. OnPrem';
+      $('lbl' + s).value = opts['label' + s] || '';
+    });
+    $('hL').textContent = label('L');
+    $('hR').textContent = label('R');
+    if (view) { renderFileInfo('L'); renderFileInfo('R'); }
+  }
+
+  function selectedNode() { return selPath == null ? null : index.get(selPath) || null; }
+  function select(path, scroll) {
+    selPath = path;
+    var rows = $('tree').querySelectorAll('.row');
+    for (var i = 0; i < rows.length; i++) {
+      var on = rows[i].getAttribute('data-p') === path;
+      rows[i].classList.toggle('sel', on);
+      rows[i].setAttribute('aria-selected', on);
+      if (on && scroll) rows[i].scrollIntoView({ block: 'nearest' });
+    }
+    updateButtons();
+  }
+  function toggle(path, open) {
+    if (open === undefined) open = !expanded.has(path);
+    if (open) expanded.add(path); else expanded.delete(path);
+    renderTree();
+  }
+
+  function updateButtons() {
+    var n = selectedNode();
+    $('copyR').disabled = !n || !n.L || scanning;
+    $('copyL').disabled = !n || !n.R || scanning;
+    $('fAll').setAttribute('aria-pressed', opts.filter === 'all');
+    $('fDiff').setAttribute('aria-pressed', opts.filter === 'diff');
+    $('expAll').disabled = $('colAll').disabled = !root;
+  }
+
+  // Copies the selected file, or all differing files below the selected folder, to the other side
+  async function copyNode(to) {
+    var n = selectedNode(), from = OTHER[to];
+    if (!n || !n[from]) return;
+    var list = n.isDir
+      ? LM.files(n).filter(function (f) { return f[from] && (f.st === 'diff' || f.st === SIDE[from] || f.st === 'error'); })
+      : n.st === 'same' ? [] : [n];
+    if (!list.length) { toast('Nothing to copy: no differing files from the ' + SIDE[from] + ' side.'); return; }
+    var over = list.filter(function (f) { return f[to]; }).length;
+    var names = list.slice(0, 12).map(function (f) { return '  ' + f.path; }).join('\n') + (list.length > 12 ? '\n  … and ' + (list.length - 12) + ' more' : '');
+    if (!confirm('Copy ' + list.length + (list.length === 1 ? ' file' : ' files') + ' from ' + label(from) + ' to ' + label(to) + '?' +
+                 (over ? '\n' + over + ' existing ' + (over === 1 ? 'file is' : 'files are') + ' overwritten.' : '') + '\n\n' + names)) return;
+    if (view && list.indexOf(view.node) >= 0 && anyDirty() && !confirm('The open file has unsaved changes. Discard them?')) return;
+    if (!(await ensurePerm(sides[to], true))) { toast('No write access to the ' + SIDE[to] + ' folder.', 'err'); return; }
+    var ok = 0, failed = [];
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      try {
+        var src = await f[from].handle.getFile();
+        var fh = await LM.writeFile(sides[to], LM.sideParts(f, to), new Uint8Array(await src.arrayBuffer()));
+        var dst = await fh.getFile();
+        f[to] = { name: f[to] ? f[to].name : f[from].name, handle: fh, size: dst.size, mtime: dst.lastModified };
+        f.st = 'same';
+        for (var p = f.parent; p && p.parent && !p[to]; p = p.parent) p[to] = { name: p[from].name, handle: null };
+        ok++;
+      } catch (e) {
+        failed.push(f.path + ': ' + e.message);
+      }
+    }
+    LM.aggregate(root);
+    renderTree();
+    if (view && list.indexOf(view.node) >= 0) await openFile(view.node, true, true);
+    if (failed.length) toast('Copied ' + ok + ', failed ' + failed.length + ':\n' + failed.slice(0, 5).join('\n'), 'err');
+    else toast('Copied ' + ok + (ok === 1 ? ' file' : ' files') + ' to ' + label(to) + '.');
+  }
+
+  // --- File compare -----------------------------------------------------------
+
+  function isDirty(fs) { return fs.lines !== fs.base || fs.finalNl !== fs.baseNl; }
+  function anyDirty() { return !!view && (isDirty(view.S.L) || isDirty(view.S.R)); }
+
+  async function readSide(e) {
+    if (!e) { var none = []; return { exists: false, lines: none, base: none, eol: null, bom: false, finalNl: true, baseNl: true, enc: '', binary: false, readonly: false }; }
+    var f = await e.handle.getFile();
+    var r = LM.decode(new Uint8Array(await f.arrayBuffer()));
+    r.exists = true;
+    r.size = f.size;
+    r.mtime = f.lastModified;
+    r.base = r.lines;
+    r.baseNl = r.finalNl;
+    e.size = f.size;
+    e.mtime = f.lastModified;
+    return r;
+  }
+
+  async function openFile(n, keepPos, force) {
+    commitEdit();
+    if (!force && view && anyDirty() && !confirm('Discard the unsaved changes in ' + view.path + '?')) return false;
+    var S;
+    try {
+      S = { L: await readSide(n.L), R: await readSide(n.R) };
+    } catch (e) {
+      toast('Cannot read ' + n.path + ': ' + e.message, 'err');
+      return false;
+    }
+    var sc = $('dvScroll'), prev = keepPos && view && view.node === n ? view : null, top = prev ? sc.scrollTop : 0;
+    view = { node: n, path: n.path, S: S, undo: [], cur: -1, cursor: prev ? prev.cursor : 0, lang: LM.langOf(n.name),
+             binary: S.L.binary || S.R.binary, rows: [], hunks: [], sel: null,
+           };
+    $('main').classList.add('split');
+    if (opts.fvh) $('main').style.setProperty('--fvh', opts.fvh + 'px');
+    selPath = n.path;
+    select(n.path, true);
+    recompute();
+    sc.scrollTop = top;
+    if (!prev && view.hunks.length) gotoHunk(0); else renderRows();
+    sc.focus({ preventScroll: true });   // vim keys now act on the file compare
+    return true;
+  }
+
+  async function closeView() {
+    if (!view) return true;
+    commitEdit();
+    if (anyDirty() && !confirm('Discard the unsaved changes in ' + view.path + '?')) return false;
+    view = null;
+    $('main').classList.remove('split');
+    $('dvRows').innerHTML = '';
+    updateButtons();
+    $('tree').focus({ preventScroll: true });
+    return true;
+  }
+
+  function recompute() {
+    var v = view, nRows = v.rows.length;
+    if (!v.binary) {
+      var d = LM.diffLines(v.S.L.lines, v.S.R.lines, opts.ignoreWs);
+      v.rows = d.rows;
+      v.hunks = d.hunks;
+      v.hs = { L: LM.hlStates(v.S.L.lines, v.lang), R: LM.hlStates(v.S.R.lines, v.lang) };
+      v.w = { L: maxCols(v.S.L.lines), R: maxCols(v.S.R.lines) };
+    }
+    if (v.cur >= v.hunks.length) v.cur = v.hunks.length - 1;
+    v.cursor = Math.max(0, Math.min(v.cursor || 0, v.rows.length - 1));
+    if (v.sel && v.rows.length !== nRows) v.sel = null;   // e.g. Ignore whitespace: the marked rows moved
+    renderDv();
+  }
+
+
+  // --- Inline editor ------------------------------------------------------------
+
+  // Edits lines [s0, s1) of one side in a textarea placed over the rows (s0 === s1: insert)
+  function openEditor(s, s0, s1, row) {
+    if (!view || !editable(s)) { toast('This side cannot be edited (binary file or encoding).', 'err'); return; }
+    commitEdit();
+    var fs = view.S[s], sc = $('dvScroll'), cs = getComputedStyle($('dv'));
+    var ln = parseFloat(cs.getPropertyValue('--ln')) || 58, gw = parseFloat(cs.getPropertyValue('--gw')) || 46;
+    var col = Math.max(200, (sc.clientWidth - 2 * ln - gw) / 2);
+    var box = document.createElement('div');
+    box.className = 'edbox';
+    box.style.top = row * CFG.lh + 'px';
+    box.style.left = (s === 'L' ? ln : ln + col + gw + ln) + 'px';
+    box.style.width = col + 'px';
+    box.innerHTML = '<textarea spellcheck="false" wrap="off" aria-label="Edit ' + SIDE[s] + ' lines"></textarea>' +
+      '<div class="edbar"><button type="button" class="btn primary" data-ed="ok">Apply</button><button type="button" class="btn" data-ed="cancel">Cancel</button>' +
+      '<span>Esc or Ctrl+Enter apply and leave edit mode · Cancel discards · empty = remove the lines · u undoes</span></div>';
+    var ta = box.firstChild;
+    // Every line ends with a newline, so a single empty line stays representable
+    ta.value = fs.lines.slice(s0, s1).map(function (l) { return l + '\n'; }).join('');
+    ta.rows = Math.max(2, s1 - s0 + 1);
+    sc.appendChild(box);
+    editing = { side: s, s0: s0, s1: s1, box: box, ta: ta, orig: ta.value, lines: fs.lines };
+    // Like vim: Esc keeps the text and returns to normal mode (a second Esc closes the file compare)
+    ta.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
+        e.preventDefault();
+        e.stopPropagation();
+        commitEdit();
+        sc.focus({ preventScroll: true });
+      }
+      else if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); ta.setRangeText('    ', ta.selectionStart, ta.selectionEnd, 'end'); }
+    });
+    box.querySelector('[data-ed="ok"]').addEventListener('click', function () { commitEdit(); sc.focus(); });
+    box.querySelector('[data-ed="cancel"]').addEventListener('click', function () { cancelEdit(); sc.focus(); });
+    ta.focus();
+  }
+  function cancelEdit() {
+    if (!editing) return;
+    editing.box.remove();
+    editing = null;
+  }
+  function commitEdit() {
+    var e = editing;
+    if (!e) return;
+    editing = null;
+    e.box.remove();
+    var v = e.ta.value.replace(/\r/g, '');
+    if (v === e.orig || !view || view.S[e.side].lines !== e.lines) return;
+    var nl = v === '' ? [] : (v.charAt(v.length - 1) === '\n' ? v.slice(0, -1) : v).split('\n');
+    change(e.side, e.lines.slice(0, e.s0).concat(nl, e.lines.slice(e.s1)));
+  }
+  // Double-click target: the section on that side, or the single line outside sections
+  function editAtRow(i, s) {
+    var r = view.rows[i];
+    if (!r) return;
+    if (r.h >= 0) {
+      var h = view.hunks[r.h];
+      view.cur = r.h;
+      openEditor(s, s === 'L' ? h.a0 : h.b0, s === 'L' ? h.a1 : h.b1, h.r0);
+    } else {
+      var idx = s === 'L' ? r.l : r.r;
+      openEditor(s, idx, idx + 1, i);
+    }
+  }
+  function maxCols(lines) {
+    var m = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].length;
+      if (l > m) { var tabs = lines[i].split('\t').length - 1; if (l + tabs * 3 > m) m = l + tabs * 3; }
+    }
+    return m;
+  }
+
+  function renderDv() {
+    var v = view;
+    if (!v) return;
+    $('dvTitle').textContent = v.path;
+    $('dvTitle').title = v.path;
+    renderFileInfo('L');
+    renderFileInfo('R');
+    $('dvBin').hidden = !v.binary;
+    $('dvMain').hidden = $('dvHb').hidden = v.binary;
+    if (!v.binary) {
+      $('dvSpacer').style.height = v.rows.length * CFG.lh + 'px';
+      ['L', 'R'].forEach(function (s) {
+        var hb = $('hb' + s);
+        hb.firstElementChild.style.width = Math.ceil(v.w[s] * charW + 24) + 'px';
+        $('dvRows').style.setProperty('--sx' + s, hb.scrollLeft);
+      });
+      syncScrollbarWidth();
+      renderMap();
+      renderRows();
+    }
+    renderDvStatus();
+    updateDvButtons();
+  }
+
+  function renderFileInfo(s) {
+    var fs = view.S[s], parts = ['<b>' + esc(label(s)) + '</b>'];
+    if (!fs.exists) {
+      parts.push('<span class="warn">missing on this side' + (isDirty(fs) ? ' – created on save' : '') + '</span>');
+    } else {
+      parts.push(fmtSize(fs.size) + ' bytes', fmtDate(fs.mtime));
+      parts.push(fs.binary ? 'binary' : fs.enc + (fs.bom ? ' BOM' : '') + ' · ' + (fs.eol === '\n' ? 'LF' : 'CRLF'));
+      if (fs.readonly && !fs.binary) parts.push('<span class="warn">read-only (only UTF-8 can be saved)</span>');
+    }
+    if (isDirty(fs)) parts.push('<span class="dirty">&#9679; modified</span>');
+    if (view.stale && view.stale[s]) parts.push('<span class="warn">changed on disk – Reload (r)</span>');
+    $('fi' + s).innerHTML = parts.join(' · ');
+  }
+
+  function renderDvStatus() {
+    var v = view, n = v.hunks.length, L = v.S.L, R = v.S.R, txt;
+    var nl = endNlDiff() ? 'line break at the end of the file only ' + (L.finalNl ? 'left' : 'right') : '';
+    if (v.binary) txt = 'Binary file – no line compare';
+    else if (!n) {
+      var fmt = L.exists && R.exists && (L.eol !== R.eol || L.bom !== R.bom);
+      txt = nl || fmt ? 'No differences in the lines' : 'No differences';
+      if (nl) txt += ' · ' + nl + ' (All → / ← All take it over)';
+      if (fmt) txt += ' · line endings or BOM differ (each side keeps its own)';
+    } else {
+      txt = n + (n === 1 ? ' difference section' : ' difference sections') + (v.cur >= 0 ? ' · section ' + (v.cur + 1) + ' of ' + n : '');
+      if (nl) txt += ' · ' + nl;
+    }
+    if (opts.ignoreWs && !v.binary) txt += ' · whitespace ignored';
+    var html = esc(txt);
+    var r = v.rows[v.cursor];
+    if (r) html += ' · cursor ' + (r.l >= 0 ? r.l + 1 : '–') + ' / ' + (r.r >= 0 ? r.r + 1 : '–');
+    if (v.sel) {
+      var a = selRange(), n2 = a[1] - a[0] + 1;
+      html += ' · <b class="c-B">' + n2 + (n2 === 1 ? ' line' : ' lines') + ' marked</b> (L / H copy · i / I edit · y / Y yank left / right · Esc unmark)';
+    }
+    $('dvInfo').innerHTML = html;
+    renderFind();
+  }
+
+  function editable(s) { return !!view && !view.binary && !view.S[s].readonly; }
+  // One side ends with a line break, the other does not (CRLF / LF and BOM are no difference here, each side keeps its own)
+  function endNlDiff() { var v = view; return !!v && !v.binary && v.S.L.exists && v.S.R.exists && v.S.L.finalNl !== v.S.R.finalNl; }
+  function updateDvButtons() {
+    var v = view, t = !!v && !v.binary, n = t ? v.hunks.length : 0;
+    $('prevH').disabled = $('nextH').disabled = !n;
+    var sel = t && !!v.sel;   // marked lines count as the current section
+    $('secR').disabled = ((!n || v.cur < 0) && !sel) || !editable('R');
+    $('secL').disabled = ((!n || v.cur < 0) && !sel) || !editable('L');
+    $('allR').disabled = (!n && !endNlDiff()) || !editable('R');
+    $('allL').disabled = (!n && !endNlDiff()) || !editable('L');
+    $('edL').disabled = !t || (v.cur < 0 && !sel) || !editable('L');
+    $('edR').disabled = !t || (v.cur < 0 && !sel) || !editable('R');
+    $('undo').disabled = !v || !v.undo.length;
+    $('saveL').disabled = !v || !isDirty(v.S.L);
+    $('saveR').disabled = !v || !isDirty(v.S.R);
+    $('saveL').classList.toggle('dirty', !$('saveL').disabled);
+    $('saveR').classList.toggle('dirty', !$('saveR').disabled);
+    var stale = v && v.stale ? ['L', 'R'].filter(function (s) { return v.stale[s]; }) : [];
+    $('dvReload').classList.toggle('stale', stale.length > 0);
+    $('dvReload').title = stale.length ? 'Changed on disk since it was loaded: ' + stale.map(label).join(', ') + ' – read it again (r)' : 'Read both files again from disk (r)';
+    updateButtons();
+  }
+
+  function renderMap() {
+    var v = view, total = v.rows.length || 1;
+    $('mapMarks').innerHTML = v.hunks.map(function (h) {
+      var k = h.kind;
+      return '<div class="mk m-' + k + '" style="top:' + (h.r0 / total * 100).toFixed(3) + '%;height:' + ((h.r1 - h.r0) / total * 100).toFixed(3) + '%"></div>';
+    }).join('');
+    updateMapVp();
+  }
+  function updateMapVp() {
+    var sc = $('dvScroll'), h = sc.scrollHeight || 1, vp = $('mapVp');
+    vp.style.top = (sc.scrollTop / h * 100) + '%';
+    vp.style.height = Math.min(100, sc.clientHeight / h * 100) + '%';
+  }
+  function syncScrollbarWidth() {
+    var sc = $('dvScroll');
+    $('dv').style.setProperty('--sbw', (sc.offsetWidth - sc.clientWidth) + 'px');
+  }
+
+  // Only the visible rows are in the DOM, so large files stay fast
+  function renderRows() {
+    var v = view;
+    if (!v || v.binary) return;
+    var sc = $('dvScroll'), lh = CFG.lh;
+    var first = Math.max(0, Math.floor(sc.scrollTop / lh) - 15);
+    var last = Math.min(v.rows.length, Math.ceil((sc.scrollTop + sc.clientHeight) / lh) + 15);
+    var html = [];
+    for (var i = first; i < last; i++) html.push(rowHtml(i));
+    var rows = $('dvRows');
+    rows.style.transform = 'translateY(' + first * lh + 'px)';
+    rows.innerHTML = html.join('');
+    updateMapVp();
+  }
+  var rafPending = false;
+  function scheduleRows() {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(function () { rafPending = false; renderRows(); });
+  }
+
+  function rowHtml(i) {
+    var v = view, r = v.rows[i], h = r.h >= 0 ? v.hunks[r.h] : null, cls = 'r k-' + r.k, goR = '', goL = '', tip = '';
+    cls += (h && r.h === v.cur ? ' cur' : '') + (h && h.r0 === i ? ' top' : '') + (h && h.r1 - 1 === i ? ' bot' : '') +
+              (i === v.cursor ? ' cursor' : '') + (v.sel && i >= Math.min(v.sel.anchor, v.cursor) && i <= Math.max(v.sel.anchor, v.cursor) ? ' vis' : '');
+    var x = r.k === 'c' ? r.x || (r.x = LM.inlineDiff(v.S.L.lines[r.l], v.S.R.lines[r.r])) : null;
+    var g = h && h.r0 === i
+      ? (editable('R') ? '<button type="button" class="cp' + goR + '" data-h="' + r.h + '" data-to="R" title="Copy this section to the right' + tip + '">&#8594;</button>' : '') +
+        (editable('L') ? '<button type="button" class="cp' + goL + '" data-h="' + r.h + '" data-to="L" title="Copy this section to the left' + tip + '">&#8592;</button>' : '')
+      : '';
+    return '<div class="' + cls + '" data-i="' + i + '">' + cell('L', r.l, x && x.a) + '<div class="g">' + g + '</div>' + cell('R', r.r, x && x.b) + '</div>';
+  }
+  function cell(s, idx, ranges) {
+    if (idx < 0) return '<span class="ln ln' + s + '"></span><span class="c c' + s + ' fill"></span>';
+    var line = view.S[s].lines[idx];
+    var toks = view.lang && line.length <= 3000 ? LM.hl(line, view.lang, view.hs[s][idx] === 1).toks : [];
+    return '<span class="ln ln' + s + '">' + (idx + 1) + '</span><span class="c c' + s + '"><span class="t">' + LM.paint(line, toks, ranges || [], LM.findIn(line, $('dvFind').value)) + '</span></span>';
+  }
+
+  // --- Find in the file compare (/) ---------------------------------------------
+  // Both sides, not case-sensitive; while typing from the row where Find started, Enter / Shift+Enter next / previous
+  // (n / N stay the sections). The found places stay marked while the field holds text, also in the next file.
+  var findFrom = 0, findCache = { q: '', rows: null, hits: [] };
+  // Rows with the text on either side; cached until the text or the lines change (every change makes new rows)
+  function findHits() {
+    var v = view, q = $('dvFind').value;
+    if (!v || v.binary || !q) return [];
+    if (findCache.q === q && findCache.rows === v.rows) return findCache.hits;
+    var hits = [];
+    v.rows.forEach(function (r, i) {
+      if ((r.l >= 0 && LM.findIn(v.S.L.lines[r.l], q).length) || (r.r >= 0 && LM.findIn(v.S.R.lines[r.r], q).length)) hits.push(i);
+    });
+    findCache = { q: q, rows: v.rows, hits: hits };
+    return hits;
+  }
+  // dir 1: first row with the text after `from` (at it with `at`), dir -1: the last one before it; wraps around
+  function findStep(dir, from, at) {
+    var hits = findHits(), k;
+    if (!hits.length) { renderRows(); renderFind(); return; }
+    if (dir > 0) { for (k = 0; k < hits.length && (at ? hits[k] < from : hits[k] <= from); k++); if (k === hits.length) k = 0; }
+    else { for (k = hits.length - 1; k >= 0 && hits[k] >= from; k--); if (k < 0) k = hits.length - 1; }
+    var row = hits[k], sc = $('dvScroll'), top = row * CFG.lh;
+    moveCursor(row, top < sc.scrollTop || top + CFG.lh > sc.scrollTop + sc.clientHeight ? 'center' : undefined);   // far away: in the middle
+    showFound(row);
+  }
+  // Scrolls each side sideways so that the first place found in this row is visible (tabs count 4 columns, like maxCols)
+  function showFound(i) {
+    var r = view.rows[i], q = $('dvFind').value;
+    ['L', 'R'].forEach(function (s) {
+      var idx = s === 'L' ? r.l : r.r, hb = $('hb' + s);
+      if (idx < 0 || !hb.clientWidth) return;
+      var line = view.S[s].lines[idx], m = LM.findIn(line, q)[0];
+      if (!m) return;
+      var x = function (p) { return (p + (line.slice(0, p).split('\t').length - 1) * 3) * charW; };
+      if (x(m[0]) < hb.scrollLeft || x(m[1]) + 16 > hb.scrollLeft + hb.clientWidth) hb.scrollLeft = Math.max(0, x(m[0]) - hb.clientWidth / 3);
+    });
+  }
+  function renderFind() {
+    var el = $('dvFindN'), hits = findHits(), k = view ? hits.indexOf(view.cursor) : -1;
+    el.textContent = !$('dvFind').value || !view || view.binary ? ''
+      : !hits.length ? 'not found' : (k >= 0 ? (k + 1) + ' of ' : '') + hits.length + (hits.length === 1 ? ' line' : ' lines');
+    el.classList.toggle('none', !hits.length);
+  }
+  $('dvFind').addEventListener('focus', function () {
+    commitEdit();   // its rows would move away under it
+    if (view) findFrom = view.cursor;
+  });
+  $('dvFind').addEventListener('input', function () {
+    if (!view || view.binary) return;
+    if ($('dvFind').value) findStep(1, findFrom, true);
+    else { renderRows(); renderFind(); }
+  });
+  $('dvFind').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();   // the page's Esc would close the file compare
+    if (!view) return;
+    if (e.key === 'Escape') { $('dvScroll').focus({ preventScroll: true }); return; }
+    if (!view.binary && $('dvFind').value) { findStep(e.shiftKey ? -1 : 1, view.cursor, false); findFrom = view.cursor; }
+  });
+
+  function gotoHunk(i) {
+    var v = view;
+    if (!v || !v.hunks.length) return;
+    v.cur = Math.max(0, Math.min(v.hunks.length - 1, i));
+    var h = v.hunks[v.cur], sc = $('dvScroll'), top = h.r0 * CFG.lh, bottom = h.r1 * CFG.lh, m = scrollOff(sc);
+    v.cursor = h.r0;
+    if (top < sc.scrollTop + m || bottom > sc.scrollTop + sc.clientHeight - m) sc.scrollTop = Math.max(0, top - Math.max(m, sc.clientHeight / 3));
+    renderRows();
+    renderDvStatus();
+    updateDvButtons();
+  }
+  // Next / previous section seen from the cursor row
+  function stepHunk(dir) {
+    var v = view;
+    if (!v || !v.hunks.length) return;
+    var row = v.cursor, k;
+    if (dir > 0) { for (k = 0; k < v.hunks.length && v.hunks[k].r0 <= row; k++); if (k === v.hunks.length) return; }
+    else { for (k = v.hunks.length - 1; k >= 0 && v.hunks[k].r0 >= row; k--); if (k < 0) return; }
+    gotoHunk(k);
+  }
+  // Margin around the cursor row in px; like vim at most half of the visible rows
+  function scrollOff(sc) {
+    return Math.max(0, Math.min(CFG.scrollOff, Math.floor((sc.clientHeight / CFG.lh - 1) / 2))) * CFG.lh;
+  }
+  // Cursor row of the vim-style navigation; the section under it becomes the current one.
+  // With marked lines the cursor is the moving end of the marking (like v in vim).
+  // how: 'center' scrolls the cursor row to the middle (like zz), 'none' does not scroll (mouse drag)
+  function moveCursor(row, how) {
+    var v = view;
+    if (!v || !v.rows.length) return;
+    v.cursor = Math.max(0, Math.min(v.rows.length - 1, row));
+    var r = v.rows[v.cursor];
+    if (r.h >= 0) v.cur = r.h;
+    var sc = $('dvScroll'), lh = CFG.lh, top = v.cursor * lh, m = scrollOff(sc);
+    if (how === 'none') { /* the row is under the mouse */ }
+    else if (how === 'center') sc.scrollTop = Math.max(0, top + lh / 2 - sc.clientHeight / 2);
+    else if (top < sc.scrollTop + m) sc.scrollTop = Math.max(0, top - m);
+    else if (top + lh > sc.scrollTop + sc.clientHeight - m) sc.scrollTop = top + lh - sc.clientHeight + m;
+    renderRows();
+    renderDvStatus();
+    updateDvButtons();
+  }
+  function hscroll(dir) {
+    ['L', 'R'].forEach(function (s) { $('hb' + s).scrollLeft += dir * 4 * charW; });
+  }
+
+  // Vim-style keys of the file compare (normal mode); returns true when the key was used
+  var pendingKey = '';
+  function vimKey(e) {
+    var v = view, k = e.key, p = pendingKey;
+    pendingKey = '';
+    if (e.altKey) return false;   // Alt+S is handled before; no other Alt keys
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl+d / Ctrl+u: half a page, then the cursor row in the middle (like Ctrl+d zz); Ctrl+Z stays the browser's
+      var half = Math.max(1, Math.floor($('dvScroll').clientHeight / CFG.lh / 2));
+      if (k === 'd') { moveCursor(v.cursor + half, 'center'); return true; }
+      if (k === 'u') { moveCursor(v.cursor - half, 'center'); return true; }
+      if (k === 'c' && v.sel) { yankSel(v.sel.side || 'L', true); return true; }   // otherwise the browser's
+      return false;
+    }
+    if (p === 'g' && k === 'g') { moveCursor(0); return true; }
+    if (p === 'z' && k === 'z') { moveCursor(v.cursor, 'center'); return true; }   // cursor row in the middle
+    switch (k) {
+      case 'j': case 'ArrowDown': moveCursor(v.cursor + 1); return true;
+      case 'k': case 'ArrowUp': moveCursor(v.cursor - 1); return true;
+      case 'h': case 'ArrowLeft': hscroll(-1); return true;
+      case 'l': case 'ArrowRight': hscroll(1); return true;
+      case 'G': moveCursor(v.rows.length - 1); return true;
+      case 'n': stepHunk(1); return true;          // next difference
+      case 'N': stepHunk(-1); return true;         // previous difference
+      case 'L': copyCurrent('R'); return true;     // marked lines / section left -> right
+      case 'H': copyCurrent('L'); return true;     // marked lines / section right -> left
+      case 'r': reloadView(); return true;
+      case 'i': editCurrent('L', v.cursor); return true;
+      case 'I': editCurrent('R', v.cursor); return true;
+      case 'v': toggleSel(); return true;
+      case 'y': yankSel('L'); return true;
+      case 'Y': yankSel('R'); return true;
+      case 'u': undo(); return true;
+      case 'g': case 'z': pendingKey = k; return true;
+      case '/': $('dvFind').focus(); $('dvFind').select(); return true;   // Find, the last text selected
+    }
+    return false;
+  }
+
+  // The marked lines, otherwise the section under the cursor, otherwise the current one (blue frame)
+  function copyCurrent(to) {
+    var v = view;
+    if (v.sel) { copySel(to); return; }
+    var r = v.rows[v.cursor], hi = r && r.h >= 0 ? r.h : v.cur;
+    if (hi < 0) { toast('No difference selected – jump to one with n or N'); return; }
+    copyHunk(hi, to);
+  }
+  // The marked lines, otherwise the section (or line) at row
+  function editCurrent(s, row) {
+    var v = view;
+    if (!v.sel) { editAtRow(row, s); return; }
+    var a = selRange(), r = sideRange(s, a[0], a[1]);
+    clearSel();
+    openEditor(s, r[0], r[1], a[0]);
+  }
+
+  // --- Marked lines (whole rows, like V in vim): v or mouse drag, Esc unmarks -------
+  // view.sel = { anchor, side }: the rows between anchor and cursor; side = where the mouse drag started (for Ctrl+C)
+
+  function selRange() {
+    var v = view;
+    return [Math.min(v.sel.anchor, v.cursor), Math.max(v.sel.anchor, v.cursor)];
+  }
+  // Lines [first, end) of side s within rows a..b; without a line there: the insert position
+  function sideRange(s, a, b) {
+    var rows = view.rows, key = s === 'L' ? 'l' : 'r', i0 = -1, n = 0, i;
+    for (i = a; i <= b; i++) if (rows[i][key] >= 0) { if (i0 < 0) i0 = rows[i][key]; n++; }
+    if (i0 < 0) {
+      i0 = 0;
+      for (i = a - 1; i >= 0; i--) if (rows[i][key] >= 0) { i0 = rows[i][key] + 1; break; }
+    }
+    return [i0, i0 + n];
+  }
+  function toggleSel() {
+    var v = view;
+    if (v.sel) { clearSel(); return; }
+    if (!v.rows.length) return;
+    v.sel = { anchor: v.cursor, side: '' };
+    renderSel();
+  }
+  function clearSel() {
+    if (!view || !view.sel) return false;
+    view.sel = null;
+    renderSel();
+    return true;
+  }
+  function renderSel() {
+    renderRows();
+    renderDvStatus();
+    updateDvButtons();
+  }
+  // The other side's lines in the marked rows replace this side's lines there
+  function copySel(to) {
+    var v = view, had = !!v.sel;
+    commitEdit();
+    if (had && !v.sel) { toast('The open edit was applied first – mark the lines again.'); return; }
+    if (!editable(to)) return;
+    var from = OTHER[to], a = selRange(), src = sideRange(from, a[0], a[1]), dst = sideRange(to, a[0], a[1]);
+    var add = v.S[from].lines.slice(src[0], src[1]), cur = v.S[to].lines;
+    var nl = src[1] === v.S[from].lines.length && dst[1] === cur.length ? v.S[from].finalNl : v.S[to].finalNl;   // up to the end: with its line break
+    if (add.length === dst[1] - dst[0] && add.every(function (l, k) { return l === cur[dst[0] + k]; }) && nl === v.S[to].finalNl) {
+      toast('The marked lines are the same on both sides.');
+      return;
+    }
+    change(to, cur.slice(0, dst[0]).concat(add, cur.slice(dst[1])), nl);
+    moveCursor(a[0]);
+  }
+  // Copies the marked lines of side s to the clipboard (with the file's line ending); y / Y end the marking
+  function yankSel(s, keep) {
+    var v = view;
+    if (!v.sel) { toast('Mark lines first: v, or drag over the lines with the mouse.'); return; }
+    var a = selRange(), r = sideRange(s, a[0], a[1]), fs = v.S[s], n = r[1] - r[0], eol = fs.eol || '\r\n';
+    if (!n) { toast('The marked rows have no lines on the ' + SIDE[s] + ' side.', 'err'); return; }
+    copyText(fs.lines.slice(r[0], r[1]).join(eol) + eol, n + (n === 1 ? ' line' : ' lines') + ' of ' + label(s) + ' copied');
+    if (!keep) clearSel();
+  }
+  function reloadView() {
+    if (view) openFile(view.node, true);
+  }
+
+  // Every change replaces the lines array, so undo just restores the previous array.
+  // finalNl: whether the side ends with a line break afterwards (undefined = as before)
+  function change(s, lines, finalNl) {
+    if (editing) cancelEdit();   // its line numbers would no longer fit
+    view.sel = null;             // so would the marked rows
+    var fs = view.S[s];
+    view.undo.push({ side: s, lines: fs.lines, finalNl: fs.finalNl, cur: view.cur, cursor: view.cursor });
+    if (view.undo.length > CFG.maxUndo) view.undo.shift();
+    fs.lines = lines;
+    if (finalNl !== undefined) fs.finalNl = finalNl;
+    recompute();
+  }
+  function undo() {
+    if (editing) { cancelEdit(); return; }
+    var u = view && view.undo.pop();
+    if (!u) return;
+    view.S[u.side].lines = u.lines;
+    view.S[u.side].finalNl = u.finalNl;
+    view.cur = u.cur;
+    view.sel = null;
+    recompute();
+    moveCursor(u.cursor);   // back where the change was made
+  }
+  function copyHunk(hi, to) {
+    commitEdit();
+    var v = view, h = v && v.hunks[hi];
+    if (!h || !editable(to)) return;
+    var src = to === 'R' ? v.S.L.lines.slice(h.a0, h.a1) : v.S.R.lines.slice(h.b0, h.b1);
+    var s0 = to === 'R' ? h.b0 : h.a0, s1 = to === 'R' ? h.b1 : h.a1, cur = v.S[to].lines;
+    var atEnd = h.a1 === v.S.L.lines.length && h.b1 === v.S.R.lines.length;   // the last lines carry the line break at the end
+    v.cur = hi;
+    change(to, cur.slice(0, s0).concat(src, cur.slice(s1)), atEnd ? v.S[OTHER[to]].finalNl : undefined);
+    if (v.cur >= 0) gotoHunk(v.cur);   // the section is gone, the cursor follows the next one (like n)
+  }
+  // The whole file including its line break at the end; CRLF / LF and BOM stay those of the target side
+  function copyAll(to) {
+    commitEdit();
+    if (!editable(to)) return;
+    var src = view.S[OTHER[to]];
+    change(to, src.lines.slice(), src.finalNl);
+  }
+
+  async function save(s) {
+    commitEdit();
+    var v = view, fs = v.S[s], n = v.node, e = n[s];
+    if (!isDirty(fs)) return true;
+    if (!editable(s)) { toast('The ' + SIDE[s] + ' side cannot be saved (encoding).', 'err'); return false; }
+    if (!(await ensurePerm(sides[s], true))) { toast('No write access to the ' + SIDE[s] + ' folder.', 'err'); return false; }
+    try {
+      if (e && e.handle && fs.exists) {
+        var disk = await e.handle.getFile();
+        if (disk.lastModified !== fs.mtime && !confirm(v.path + ' (' + label(s) + ') was changed on disk after it was loaded. Overwrite it?')) return false;
+      }
+      var other = v.S[OTHER[s]];
+      var fh = await LM.writeFile(sides[s], LM.sideParts(n, s), LM.encode(fs, other));
+      var f = await fh.getFile();
+      if (!fs.exists) {
+        var ref = other.exists ? other : fs;
+        fs.eol = ref.eol || '\r\n'; fs.bom = ref.bom; fs.finalNl = ref.finalNl; fs.enc = 'UTF-8'; fs.exists = true;
+      }
+      n[s] = { name: e ? e.name : n.name, handle: fh, size: f.size, mtime: f.lastModified };
+      for (var p = n.parent; p && p.parent && !p[s]; p = p.parent) p[s] = { name: p.name, handle: null };
+      fs.size = f.size;
+      fs.mtime = f.lastModified;
+      fs.base = fs.lines;
+      fs.baseNl = fs.finalNl;
+      if (v.stale) v.stale[s] = false;   // our own write is the state on disk now
+      await LM.compareFile(n, opts.ignoreWs);
+      LM.aggregate(root);
+      renderTree();
+      renderFileInfo(s);
+      updateDvButtons();
+      toast('Saved ' + label(s) + ': ' + v.path);
+      return true;
+    } catch (err) {
+      toast('Saving failed: ' + err.message, 'err');
+      return false;
+    }
+  }
+  async function saveAll() {
+    if (!view) return;
+    commitEdit();
+    if (isDirty(view.S.L)) await save('L');
+    if (view && isDirty(view.S.R)) await save('R');
+  }
+
+
+  // --- Events -----------------------------------------------------------------
+
+  document.querySelectorAll('[data-pick]').forEach(function (b) {
+    b.addEventListener('click', function () { pick(b.getAttribute('data-pick')); });
+  });
+  ['L', 'R'].forEach(function (s) {
+    $('lbl' + s).addEventListener('change', function () {
+      opts['label' + s] = this.value.trim();
+      saveOpts();
+      renderPaths();
+    });
+    $('hb' + s).addEventListener('scroll', function () { $('dvRows').style.setProperty('--sx' + s, this.scrollLeft); });
+  });
+
+  $('reload').addEventListener('click', function () { scan(true); });
+  $('clearAll').addEventListener('click', clearAll);
+  $('fAll').addEventListener('click', function () { opts.filter = 'all'; saveOpts(); renderTree(); });
+  $('fDiff').addEventListener('click', function () { opts.filter = 'diff'; saveOpts(); renderTree(); });
+  $('expAll').addEventListener('click', function () {
+    index.forEach(function (n) { if (n.isDir) expanded.add(n.path); });
+    renderTree();
+  });
+  $('colAll').addEventListener('click', function () { expanded.clear(); renderTree(); });
+  $('copyR').addEventListener('click', function () { copyNode('R'); });
+  $('copyL').addEventListener('click', function () { copyNode('L'); });
+
+  ['include', 'exclude'].forEach(function (id) {
+    $(id).value = opts[id];
+    $(id).addEventListener('change', function () { opts[id] = this.value.trim(); saveOpts(); scan(true); });
+  });
+  $('ignoreWs').checked = !!opts.ignoreWs;
+  $('ignoreWs').addEventListener('change', function () {
+    opts.ignoreWs = this.checked;
+    saveOpts();
+    if (view) recompute();
+    if (root) scan(true);
+  });
+
+  $('tree').addEventListener('click', function (e) {
+    var row = e.target.closest('.row'), n = row && index.get(row.getAttribute('data-p'));
+    if (!n) return;
+    select(n.path);
+    if (n.isDir) toggle(n.path);
+    else if (!view || view.node !== n) openFile(n);
+  });
+  // Keys of the folder compare; returns true when the key was used.
+  // r / e / c / a / d act like Reload / Expand / Collapse / All / Differences (.click() keeps the buttons' disabled state),
+  // Alt+l / Alt+h like Copy → / ← Copy (asks first; only while no file is open, then they take over the whole file),
+  // / goes to Find, then arrow keys, the vim motions j/k/h/l and Enter
+  var TREE_KEYS = { r: 'reload', e: 'expAll', c: 'colAll', a: 'fAll', d: 'fDiff' };
+  var VIM = { j: 'ArrowDown', k: 'ArrowUp', h: 'ArrowLeft', l: 'ArrowRight' };
+  function treeKey(e) {
+    if (!view && (altKey(e, 'l') || altKey(e, 'h')) && !e.shiftKey) { $(altKey(e, 'l') ? 'copyR' : 'copyL').click(); return true; }
+    if (e.ctrlKey || e.altKey || e.metaKey) return false;
+    if (TREE_KEYS[e.key]) { $(TREE_KEYS[e.key]).click(); return true; }
+    if (e.key === '/') { $('find').focus(); $('find').select(); return true; }
+    if (!vis.length) return false;
+    var key = VIM[e.key] || e.key;
+    var i = -1, k;
+    for (k = 0; k < vis.length; k++) if (vis[k].n.path === selPath) { i = k; break; }
+    var n = i >= 0 ? vis[i].n : null;
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
+      var j = Math.max(0, Math.min(vis.length - 1, i + (key === 'ArrowDown' ? 1 : -1)));
+      select(vis[j].n.path, true);
+    } else if (key === 'ArrowRight' && n && n.isDir) {
+      toggle(n.path, true);
+    } else if (key === 'ArrowLeft' && n) {
+      if (n.isDir && expanded.has(n.path) && !findQ()) toggle(n.path, false);   // while finding all folders are shown open
+      else if (n.parent && n.parent.parent) select(n.parent.path, true);
+    } else if (key === 'Enter' && n) {
+      if (n.isDir) toggle(n.path); else openFile(n);
+    } else return false;
+    return true;
+  }
+  $('tree').addEventListener('keydown', function (e) { if (treeKey(e)) e.preventDefault(); });
+
+  // Find in the folder compare: filters while typing; Enter goes to the list (on the first file found unless the
+  // selected one is still shown), Esc clears it and keeps the selected file visible
+  $('find').addEventListener('input', renderTree);
+  $('find').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();   // the page's Esc would close the file compare
+    var n = selectedNode();
+    if (e.key === 'Enter') {
+      if (!vis.some(function (x) { return x.n === n; })) {
+        var f = vis.filter(function (x) { return !x.n.isDir; })[0] || vis[0];
+        if (f) select(f.n.path, true);
+      }
+    } else {
+      this.value = '';
+      for (var p = n && n.parent; p && p.parent; p = p.parent) expanded.add(p.path);
+      renderTree();
+      if (n) select(n.path, true);
+    }
+    $('tree').focus();
+  });
+
+  $('prevH').addEventListener('click', function () { stepHunk(-1); });
+  $('nextH').addEventListener('click', function () { stepHunk(1); });
+  $('secR').addEventListener('click', function () { if (view) copyCurrent('R'); });
+  $('secL').addEventListener('click', function () { if (view) copyCurrent('L'); });
+  $('allR').addEventListener('click', function () { copyAll('R'); });
+  $('allL').addEventListener('click', function () { copyAll('L'); });
+  $('undo').addEventListener('click', undo);
+  $('saveL').addEventListener('click', function () { save('L'); });
+  $('saveR').addEventListener('click', function () { save('R'); });
+  $('dvReload').addEventListener('click', reloadView);
+  $('dvClose').addEventListener('click', closeView);
+  ['L', 'R'].forEach(function (s) {
+    $('ed' + s).addEventListener('click', function () {
+      commitEdit();
+      if (view && (view.sel || view.cur >= 0)) editCurrent(s, view.cur >= 0 ? view.hunks[view.cur].r0 : view.cursor);
+    });
+  });
+
+  $('dvScroll').addEventListener('scroll', scheduleRows);
+  $('dvScroll').addEventListener('wheel', function (e) {
+    var dx = e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX;
+    if (!dx || (!e.shiftKey && Math.abs(e.deltaX) < Math.abs(e.deltaY))) return;
+    var r = this.getBoundingClientRect();
+    $(e.clientX < r.left + r.width / 2 ? 'hbL' : 'hbR').scrollLeft += dx;
+    e.preventDefault();
+  }, { passive: false });
+  // Mouse marking: dragging over the rows marks whole lines (the cursor is the moving end), Shift+click extends
+  // from the cursor. A plain click only moves the cursor; it stays in the click handler so double-click keeps working.
+  var drag = null, skipClick = false;
+  function sideAt(el) { return el.closest('.cL, .lnL') ? 'L' : el.closest('.cR, .lnR') ? 'R' : ''; }
+  function rowAtY(y) {
+    var sc = $('dvScroll');
+    return Math.floor((y - sc.getBoundingClientRect().top + sc.scrollTop) / CFG.lh);
+  }
+  function dragTo() {
+    if (!drag || !view) return;
+    var i = Math.max(0, Math.min(view.rows.length - 1, rowAtY(drag.y)));
+    if (!view.sel && i === drag.anchor) return;            // still a click
+    if (!view.sel) view.sel = { anchor: drag.anchor, side: drag.side };
+    drag.moved = true;
+    if (i !== view.cursor || !drag.shown) { drag.shown = true; moveCursor(i, 'none'); }
+  }
+  function dragTick() {                                    // scrolls while the mouse is above / below the lines
+    if (!drag || !drag.moved) return;
+    var sc = $('dvScroll'), b = sc.getBoundingClientRect(), d = drag.y < b.top ? drag.y - b.top : drag.y > b.bottom ? drag.y - b.bottom : 0;
+    if (!d) return;
+    sc.scrollTop += Math.sign(d) * Math.min(5, Math.ceil(Math.abs(d) / CFG.lh)) * CFG.lh;
+    dragTo();
+  }
+  $('dvRows').addEventListener('mousedown', function (e) {
+    skipClick = false;
+    var r = e.target.closest('.r');
+    if (e.button !== 0 || !r || !view || e.target.closest('.cp')) return;
+    var i = Number(r.getAttribute('data-i'));
+    if (e.shiftKey) {
+      if (!view.sel) view.sel = { anchor: view.cursor, side: sideAt(e.target) };
+      moveCursor(i, 'none');
+      skipClick = true;
+      return;
+    }
+    if (view.sel) { view.sel = null; moveCursor(i, 'none'); skipClick = true; }
+    drag = { anchor: i, side: sideAt(e.target), y: e.clientY, moved: false, timer: setInterval(dragTick, 50) };
+  });
+  document.addEventListener('mousemove', function (e) {
+    if (!drag) return;
+    drag.y = e.clientY;
+    dragTo();
+  });
+  document.addEventListener('mouseup', function () {
+    if (!drag) return;
+    clearInterval(drag.timer);
+    if (drag.moved) skipClick = true;
+    drag = null;
+  });
+  $('dvScroll').addEventListener('scroll', function () { if (drag && drag.moved) dragTo(); });   // mouse wheel while dragging
+  $('dvRows').addEventListener('click', function (e) {
+    if (skipClick) { skipClick = false; return; }
+    var b = e.target.closest('.cp');
+    if (b) { copyHunk(Number(b.getAttribute('data-h')), b.getAttribute('data-to')); return; }
+    var r = e.target.closest('.r');
+    if (!r || !view) return;
+    moveCursor(Number(r.getAttribute('data-i')));
+  });
+  $('dvRows').addEventListener('dblclick', function (e) {
+    var r = e.target.closest('.r'), s = sideAt(e.target);
+    if (!r || !s || !view || e.target.closest('.cp')) return;
+    // An open editor is applied first; its change moves the rows, so a new double-click is needed
+    if (editing) { commitEdit(); return; }
+    editAtRow(Number(r.getAttribute('data-i')), s);
+  });
+  $('map').addEventListener('click', function (e) {
+    var r = this.getBoundingClientRect(), sc = $('dvScroll');
+    sc.scrollTop = (e.clientY - r.top) / r.height * sc.scrollHeight - sc.clientHeight / 2;
+  });
+
+  $('split').addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    var main = $('main'), top = main.getBoundingClientRect().top;
+    function move(ev) {
+      opts.fvh = Math.round(Math.max(80, Math.min(main.clientHeight - 160, ev.clientY - top)));
+      main.style.setProperty('--fvh', opts.fvh + 'px');
+      scheduleRows();
+    }
+    function up() {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+      saveOpts();
+      syncScrollbarWidth();
+    }
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  });
+
+
+  function altKey(e, k) { return e.altKey && !e.ctrlKey && !e.metaKey && (e.code === 'Key' + k.toUpperCase() || e.key.toLowerCase() === k); }
+  document.addEventListener('keydown', function (e) {
+    if (document.querySelector('dialog[open]')) return;
+    // Alt+C clears both folders from anywhere on the page (asks first, like the button)
+    if (altKey(e, 'c')) { e.preventDefault(); $('clearAll').click(); return; }
+    if (!view) {
+      // Without an open file the folder compare keys work anywhere, also right after loading the page when
+      // nothing has the focus yet. Text fields keep their keys, a focused button its Enter.
+      if (e.target.closest('input, textarea, select, #tree') || (e.key === 'Enter' && e.target.closest('button'))) return;
+      if (treeKey(e)) e.preventDefault();
+      return;
+    }
+    // Alt+S saves both sides, also while the editor is open (Ctrl+S stays the browser's)
+    if (altKey(e, 's')) { e.preventDefault(); saveAll(); return; }
+    // Alt+l / Alt+h: the whole file to the right / to the left like All → / ← All (directions as L / H, without Shift),
+    // also with the focus in the folder list; without an open file they copy there (treeKey)
+    if ((altKey(e, 'l') || altKey(e, 'h')) && !e.shiftKey && !e.target.closest('input, textarea, select')) {
+      e.preventDefault();
+      $(altKey(e, 'l') ? 'allR' : 'allL').click();
+      return;
+    }
+    if (e.key === 'Escape') {
+      // The editor turns its own Esc into "apply"; here: leave edit mode, then unmark, otherwise close the file compare
+      if (editing) commitEdit(); else if (!clearSel()) closeView();
+      e.preventDefault();
+      return;
+    }
+    // Text fields keep their keys, the folder tree has its own (treeKey)
+    if (e.target.closest('input, textarea, select, #tree')) return;
+    if (vimKey(e)) e.preventDefault();
+  });
+  addEventListener('resize', function () { if (view && !view.binary) { syncScrollbarWidth(); renderRows(); } });
+  addEventListener('beforeunload', function (e) {
+    if (!anyDirty() && !editing) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+
+  // Files of the open compare changed outside the page (another editor or tool): Reload turns orange
+  var diskBusy = false;
+  async function checkDisk() {
+    var v = view;
+    if (!v || diskBusy || document.hidden) return;
+    diskBusy = true;
+    try {
+      var stale = { L: false, R: false };
+      for (var s of ['L', 'R']) {
+        var e = v.node[s], fs = v.S[s];
+        if (!e || !e.handle || !fs.exists) continue;   // only files that were loaded
+        try {
+          var f = await e.handle.getFile();
+          stale[s] = f.lastModified !== fs.mtime || f.size !== fs.size;
+        } catch (err) {
+          stale[s] = true;                              // deleted or no longer readable
+        }
+      }
+      var old = v.stale || {};
+      if (view === v && (stale.L !== !!old.L || stale.R !== !!old.R)) {
+        v.stale = stale;
+        renderFileInfo('L');
+        renderFileInfo('R');
+        updateDvButtons();
+      }
+    } finally {
+      diskBusy = false;
+    }
+  }
+  setInterval(checkDisk, CFG.diskMs);
+  addEventListener('focus', checkDisk);
+
+  // --- Start ------------------------------------------------------------------
+
+  (function measureChar() {
+    var s = document.createElement('span');
+    s.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:12.5px var(--mono)';
+    s.textContent = 'M'.repeat(100);
+    document.body.appendChild(s);
+    charW = s.getBoundingClientRect().width / 100 || charW;
+    s.remove();
+  })();
+
+  (async function start() {
+    renderPaths();
+    renderTree();
+    if (!window.showDirectoryPicker) {
+      document.querySelectorAll('[data-pick]').forEach(function (b) { b.disabled = true; });
+      $('reload').disabled = true;
+      renderTree();
+    }
+    if (!window.showDirectoryPicker || !window.indexedDB) return;
+    sides.L = await loadHandle('L');
+    sides.R = await loadHandle('R');
+    renderPaths();
+    if (sides.L && sides.R) {
+      if (await ensurePerm(sides.L, false) && await ensurePerm(sides.R, false)) scan(false);
+      else setStatus('Click Reload to allow access to the folders "' + sides.L.name + '" and "' + sides.R.name + '" again.', 'hint');
+    }
+  })();
+})();
+</script>
+</body>
+</html>
