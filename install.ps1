@@ -34,7 +34,7 @@
     $version = $env:LAZYMERGE_VERSION
     if (-not [string]::IsNullOrWhiteSpace($version)) {
         if ($version -notmatch '^v?[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?$') {
-            throw 'LAZYMERGE_VERSION must be a version such as 0.1.1.'
+            throw 'LAZYMERGE_VERSION must be a version such as 0.1.2.'
         }
         $version = $version -replace '^v', ''
         $release = "https://github.com/he-d/lazymerge/releases/download/v$version"

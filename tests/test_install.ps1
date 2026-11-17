@@ -27,7 +27,7 @@ try {
     $env:LAZYMERGE_INSTALL_DIR = Join-Path $temporary 'my tools\bin'
     $env:LAZYMERGE_NO_MODIFY_PATH = '1'
     $env:PROCESSOR_ARCHITEW6432 = ''
-    $env:LAZYMERGE_VERSION = 'v0.1.1'
+    $env:LAZYMERGE_VERSION = 'v0.1.2'
     $checksums = @()
     foreach ($target in @('x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc')) {
         $source = Join-Path $temporary $target
@@ -46,7 +46,7 @@ try {
         $target = if ($architecture -eq 'AMD64') { 'x86_64-pc-windows-msvc' } else { 'aarch64-pc-windows-msvc' }
         Assert-InstallerTest ([IO.File]::ReadAllText($destination) -eq "test executable $target") 'Incorrect executable installed.'
     }
-    Assert-InstallerTest ($global:LazyMergeTestRequests[0] -like '*/releases/download/v0.1.1/*') 'Pinned version was ignored.'
+    Assert-InstallerTest ($global:LazyMergeTestRequests[0] -like '*/releases/download/v0.1.2/*') 'Pinned version was ignored.'
     $env:LAZYMERGE_VERSION = ''
     & $installer
     Assert-InstallerTest ($global:LazyMergeTestRequests[-1] -like '*/releases/latest/download/*') 'Latest release was ignored.'

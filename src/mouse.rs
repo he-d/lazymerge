@@ -165,7 +165,12 @@ impl App {
                 session.cursor = row;
                 session.anchor = None;
                 let to = usize::from(event.column > self.mouse_state.diff_gutter.x);
-                session.merge(to, false, self.config.ignore_whitespace)?;
+                session.merge(
+                    to,
+                    false,
+                    self.config.ignore_whitespace,
+                    self.config.jump_after_merge,
+                )?;
                 self.message = "Merge staged. Save to write to disk; u to undo.".into();
             }
             return Ok(());
@@ -490,6 +495,24 @@ mod tests {
             session.docs[1].baseline.as_deref(),
             Some(b"right\nsame\nlast right\n".as_slice())
         );
+    }
+
+    #[test]
+    fn section_arrow_respects_the_merge_jump_setting() {
+        for jump in [false, true] {
+            let mut app = diff_app("left\nsame\nlast left\n", "right\nsame\nlast right\n");
+            app.config.jump_after_merge = jump;
+            let gutter = app.mouse_state.diff_gutter;
+            app.mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                gutter.x + 1,
+                gutter.y,
+            ))
+            .unwrap();
+            let session = app.session.as_ref().unwrap();
+            assert_eq!(session.cursor, if jump { 2 } else { 0 });
+            assert_eq!(session.docs[1].lines[0], "left");
+        }
     }
 
     #[test]

@@ -63,7 +63,7 @@ shutil.copyfile(source, destination)
         path.chmod(0o755)
 
     def archive(self, target, name='lazymerge'):
-        content = f'#!/bin/sh\nprintf "lazymerge 0.1.1 {target}\\n"\n'.encode()
+        content = f'#!/bin/sh\nprintf "lazymerge 0.1.2 {target}\\n"\n'.encode()
         with tarfile.open(self.fixtures / f'lazymerge-{target}.tar.gz', 'w:gz') as archive:
             info = tarfile.TarInfo(name)
             info.mode = 0o755
@@ -116,10 +116,10 @@ shutil.copyfile(source, destination)
         self.install.mkdir(parents=True)
         destination = self.install / 'lazymerge'
         destination.write_bytes(b'old binary')
-        result = self.run_installer(LAZYMERGE_VERSION='v0.1.1')
+        result = self.run_installer(LAZYMERGE_VERSION='v0.1.2')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('releases/download/v0.1.1/', self.log.read_text())
-        self.assertIn('lazymerge 0.1.1', destination.read_text())
+        self.assertIn('releases/download/v0.1.2/', self.log.read_text())
+        self.assertIn('lazymerge 0.1.2', destination.read_text())
         self.assertEqual(list(self.install.iterdir()), [destination])
 
     def test_bad_checksum_preserves_existing_install(self):

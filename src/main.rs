@@ -24,18 +24,26 @@ struct Args {
     left: Option<PathBuf>,
     #[arg(short = 'r', long, value_name = "PATH", conflicts_with_all = ["left_path", "right_path"])]
     right: Option<PathBuf>,
-    /// Lua configuration (default: $XDG_CONFIG_HOME/lazymerge/config.lua)
+    /// Lua configuration file (created automatically at the default path)
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
     /// Print the default Lua configuration and exit
     #[arg(long)]
     print_config: bool,
+    /// Restore the default Lua config and exit; use --config FILE for a custom path
+    #[arg(long, conflicts_with_all = ["print_config", "left_path", "right_path", "left", "right"])]
+    reset_config: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
     if args.print_config {
-        print!("{}", include_str!("../config.example.lua"));
+        print!("{}", config::DEFAULT_CONFIG);
+        return Ok(());
+    }
+    if args.reset_config {
+        let path = config::Config::reset(args.config.as_deref())?;
+        println!("Restored default config: {}", path.display());
         return Ok(());
     }
     let config = config::Config::load(args.config.as_deref())?;
@@ -63,5 +71,26 @@ mod tests {
             assert!(Args::try_parse_from(args).is_ok());
         }
         assert!(Args::try_parse_from(["lazymerge", "a", "b", "-l", "c"]).is_err());
+    }
+
+    #[test]
+    fn reset_config_accepts_a_custom_path_and_rejects_startup_or_print_options() {
+        assert!(
+            Args::try_parse_from(["lazymerge", "--reset-config"])
+                .unwrap()
+                .reset_config
+        );
+        let args =
+            Args::try_parse_from(["lazymerge", "--reset-config", "--config", "my config.lua"])
+                .unwrap();
+        assert_eq!(args.config, Some(PathBuf::from("my config.lua")));
+        for arguments in [
+            vec!["lazymerge", "--reset-config", "--print-config"],
+            vec!["lazymerge", "--reset-config", "left", "right"],
+            vec!["lazymerge", "--reset-config", "-l", "left"],
+            vec!["lazymerge", "--reset-config", "-r", "right"],
+        ] {
+            assert!(Args::try_parse_from(arguments).is_err());
+        }
     }
 }

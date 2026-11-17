@@ -7,7 +7,7 @@
   A Rust terminal app and a self-contained HTML app. Both work locally, without a server.
 </p>
 
-Current version: **0.1.1** for both the terminal and browser apps.
+Current version: **0.1.2** for both the terminal and browser apps.
 
 ## Terminal version
 
@@ -37,7 +37,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/he-
 
 The installers download a prebuilt binary from [GitHub Releases](https://github.com/he-d/lazymerge/releases), verify its SHA-256 checksum, and install for your user account. No Rust toolchain, Lua installation or administrator access is needed. Rerun the same command to update.
 
-Linux/macOS installs to `~/.local/bin` by default; the installer prints any `PATH` setup needed. Windows installs to `%LOCALAPPDATA%\LazyMerge\bin` and updates your user `PATH`; open a new terminal afterward. Set `LAZYMERGE_INSTALL_DIR` to use another directory or `LAZYMERGE_VERSION=0.1.1` to select a release.
+Linux/macOS installs to `~/.local/bin` by default; the installer prints any `PATH` setup needed. Windows installs to `%LOCALAPPDATA%\LazyMerge\bin` and updates your user `PATH`; open a new terminal afterward. Set `LAZYMERGE_INSTALL_DIR` to use another directory or `LAZYMERGE_VERSION=0.1.2` to select a release.
 
 The download commands require the installer files on `main` and published release binaries; see [Publishing a release](#publishing-a-release). To install directly from a local checkout, install a Rust toolchain and a C compiler, then run:
 
@@ -105,13 +105,19 @@ Include/exclude patterns are case-insensitive and separated by semicolons or com
 
 ### Lua configuration
 
-LazyMerge reads `$XDG_CONFIG_HOME/lazymerge/config.lua`, or `~/.config/lazymerge/config.lua` when `XDG_CONFIG_HOME` is unset. An absent default file uses the built-in settings. Use an explicit file with:
+On first start, LazyMerge creates its config directory and a complete, commented `config.lua` using [`config.example.lua`](config.example.lua). Existing config files are preserved. The default locations are:
+
+| Platform | Config file |
+|---|---|
+| Linux | `~/.config/lazymerge/config.lua` |
+| macOS | `~/Library/Application Support/lazymerge/config.lua` |
+| Windows | `%LOCALAPPDATA%\lazymerge\config.lua` |
+
+Setting `XDG_CONFIG_HOME` overrides these locations on every platform: `$XDG_CONFIG_HOME/lazymerge/config.lua`. Home paths such as `~\projects` work on Windows as well. Use an existing custom config file with:
 
 ```sh
 lazymerge --config /path/to/config.lua /left /right
 ```
-
-On Windows, the default is `%APPDATA%\lazymerge\config.lua`; `XDG_CONFIG_HOME` still takes precedence. Home paths such as `~\projects` work there as well.
 
 The config is executable Lua and must return a table. Omitted settings, colours and key bindings retain their defaults:
 
@@ -122,6 +128,7 @@ return {
   right_label = "Main",
   tree_percent = 35,
   ignore_whitespace = false,
+  jump_after_merge = false,
   include = "*.rs;*.json",
   colors = { logo_lazy = "#957FB8", logo_merge = "#98BB6C" },
   keys = { quit = "ctrl+q" },
@@ -130,7 +137,19 @@ return {
 
 See [`config.example.lua`](config.example.lua) for all settings, colour names and configurable actions. Bindings support characters, named keys and modifiers such as `ctrl+q`, `alt+l` or `f2`; letter case matters. Set a binding to `""` to disable it. Unknown settings, invalid colours and duplicate bindings produce an error. Quit confirmation always remains enabled.
 
-`lazymerge --print-config` prints the complete default Lua configuration and exits without writing a file. After creating the config directory, you can save it with `lazymerge --print-config > ~/.config/lazymerge/config.lua` (adjust the path when using `XDG_CONFIG_HOME`). Setting `show_logo = false` leaves the compact LazyMerge header visible.
+Navigation bindings are named `scroll_left = "h"`, `scroll_right = "l"`, `scroll_down = "j"` and `scroll_up = "k"`. Left/right scroll file text horizontally; in the folder tree they collapse/expand folders. Up/down move through rows in either view. The older names `collapse`, `expand`, `down` and `up` remain accepted for existing config files; use one name per action.
+
+`jump_after_merge = true` is the default: after merging a differing section with `L` / `H` or the mouse arrows, the cursor jumps to the next remaining section. Set it to `false` to keep the cursor in place, clamped to the remaining rows. `Alt+l` / `Alt+h` merge the whole file.
+
+Restore the default config with:
+
+```sh
+lazymerge --reset-config
+```
+
+This overwrites the default config and exits. It works even if the old file has invalid Lua, unknown settings or duplicate bindings. To reset a custom file, use `lazymerge --reset-config --config /path/to/config.lua`; this can also create the file and its directory.
+
+`lazymerge --print-config` prints the complete default Lua configuration and exits without writing a file. Setting `show_logo = false` leaves the compact LazyMerge header visible.
 
 ### File handling and development
 
@@ -147,13 +166,13 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-On Unix, `cargo build --locked` followed by `python3 tests/pty_smoke.py` exercises startup and path completion, both command-line path forms, the edit/save shortcuts, CRLF preservation, external changes and save conflicts, mouse clicks, focus changes and quit confirmation in a real terminal session.
+On Unix, `cargo build --locked` followed by `python3 tests/pty_smoke.py` exercises config creation and reset, startup and path completion, both command-line path forms, the edit/save shortcuts, CRLF preservation, external changes and save conflicts, mouse clicks, focus changes and quit confirmation in a real terminal session.
 
 Run `python3 tests/test_install.py` for the Unix installer's offline integration tests. Windows installer tests run with `powershell -ExecutionPolicy Bypass -File tests/test_install.ps1`.
 
 ### Publishing a release
 
-The [release workflow](.github/workflows/release.yml) tests and builds native x64/ARM64 binaries for Linux, macOS and Windows. It also runs the terminal smoke tests on Linux and macOS. Linux builds use musl. Pushing a version tag matching both apps, such as `v0.1.1`, publishes the archives, `SHA256SUMS`, browser HTML, installers and example config to GitHub Releases. Installer updates check these release checksums before replacing an existing executable.
+The [release workflow](.github/workflows/release.yml) tests and builds native x64/ARM64 binaries for Linux, macOS and Windows. It also runs the terminal smoke tests on Linux and macOS. Linux builds use musl. Pushing a version tag matching both apps, such as `v0.1.2`, publishes the archives, `SHA256SUMS`, browser HTML, installers and example config to GitHub Releases. Installer updates check these release checksums before replacing an existing executable.
 
 Publish the source and installer scripts on `main` before pushing the release tag. Running the workflow manually builds and checks the packages without publishing a release. The public one-line commands become usable after those files and release assets are published.
 

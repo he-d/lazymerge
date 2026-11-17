@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install a published LazyMerge binary. No Rust toolchain or root access needed.
-# Optional: LAZYMERGE_VERSION=0.1.1 LAZYMERGE_INSTALL_DIR=/your/bin sh install.sh
+# Optional: LAZYMERGE_VERSION=0.1.2 LAZYMERGE_INSTALL_DIR=/your/bin sh install.sh
 set -eu
 
 fail() { printf 'LazyMerge: %s\n' "$*" >&2; exit 1; }
@@ -38,7 +38,7 @@ version=${LAZYMERGE_VERSION:-}
 if [ -n "$version" ]; then
     version=${version#v}
     printf '%s\n' "$version" | LC_ALL=C grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?$' \
-        || fail 'LAZYMERGE_VERSION must be a version such as 0.1.1.'
+        || fail 'LAZYMERGE_VERSION must be a version such as 0.1.2.'
     release="https://github.com/he-d/lazymerge/releases/download/v$version"
 else
     release=https://github.com/he-d/lazymerge/releases/latest/download

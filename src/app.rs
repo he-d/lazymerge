@@ -885,10 +885,10 @@ impl App {
 
     fn tree_key(&mut self, key: KeyEvent, action: Option<&str>) -> Result<()> {
         match (key.code, action) {
-            (KeyCode::Down, None) | (_, Some("down")) => {
+            (KeyCode::Down, None) | (_, Some("scroll_down")) => {
                 self.selected = (self.selected + 1).min(self.visible().len().saturating_sub(1))
             }
-            (KeyCode::Up, None) | (_, Some("up")) => {
+            (KeyCode::Up, None) | (_, Some("scroll_up")) => {
                 self.selected = self.selected.saturating_sub(1)
             }
             (KeyCode::PageDown, None) => {
@@ -945,12 +945,12 @@ impl App {
                     }
                 }
             }
-            (KeyCode::Right, None) | (_, Some("expand")) => {
+            (KeyCode::Right, None) | (_, Some("scroll_right")) => {
                 if let Some(node) = self.selected_node().filter(|n| n.is_dir) {
                     self.expanded.insert(node.path.clone());
                 }
             }
-            (KeyCode::Left, None) | (_, Some("collapse")) => {
+            (KeyCode::Left, None) | (_, Some("scroll_left")) => {
                 if let Some(node) = self.selected_node() {
                     let path = node.path.clone();
                     if !self.expanded.remove(&path)
@@ -1006,8 +1006,8 @@ impl App {
             return Ok(());
         }
         match (key.code, action) {
-            (KeyCode::Down, None) | (_, Some("down")) => self.move_cursor(1),
-            (KeyCode::Up, None) | (_, Some("up")) => self.move_cursor(-1),
+            (KeyCode::Down, None) | (_, Some("scroll_down")) => self.move_cursor(1),
+            (KeyCode::Up, None) | (_, Some("scroll_up")) => self.move_cursor(-1),
             (KeyCode::PageDown, None) => self.move_cursor(self.diff_height.max(1) as isize),
             (KeyCode::PageUp, None) => self.move_cursor(-(self.diff_height.max(1) as isize)),
             (KeyCode::Char('d'), None) if key.modifiers == KeyModifiers::CONTROL => {
@@ -1028,11 +1028,11 @@ impl App {
                 let s = self.session.as_mut().unwrap();
                 s.cursor = s.diff.rows.len().saturating_sub(1);
             }
-            (KeyCode::Left, None) | (_, Some("collapse")) => {
+            (KeyCode::Left, None) | (_, Some("scroll_left")) => {
                 let s = self.session.as_mut().unwrap();
                 s.horizontal = s.horizontal.saturating_sub(4);
             }
-            (KeyCode::Right, None) | (_, Some("expand")) => {
+            (KeyCode::Right, None) | (_, Some("scroll_right")) => {
                 self.session.as_mut().unwrap().horizontal += 4
             }
             (_, Some("next" | "previous")) => {
@@ -1049,10 +1049,12 @@ impl App {
             (_, Some("merge_right" | "merge_left" | "copy_right" | "copy_left")) => {
                 let to = usize::from(matches!(action, Some("merge_right" | "copy_right")));
                 let all = matches!(action, Some("copy_right" | "copy_left"));
-                self.session
-                    .as_mut()
-                    .unwrap()
-                    .merge(to, all, self.config.ignore_whitespace)?;
+                self.session.as_mut().unwrap().merge(
+                    to,
+                    all,
+                    self.config.ignore_whitespace,
+                    self.config.jump_after_merge,
+                )?;
                 self.message = "Merge staged. Save to write to disk; u to undo.".into();
             }
             (_, Some("edit_left" | "edit_right")) => {
@@ -1373,6 +1375,55 @@ mod tests {
         app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))
             .unwrap();
         assert!(!app.session.as_ref().unwrap().dirty());
+    }
+
+    #[test]
+    fn renamed_scroll_bindings_move_the_cursor_and_horizontal_view() {
+        let mut app = app_with_text("one\ntwo\nthree\n");
+        for (action, binding) in [
+            ("scroll_down", "2"),
+            ("scroll_up", "8"),
+            ("scroll_left", "4"),
+            ("scroll_right", "6"),
+        ] {
+            app.config.keys.insert(action.into(), binding.into());
+        }
+        app.config.validate().unwrap();
+        app.key(key(KeyCode::Char('2'))).unwrap();
+        app.key(key(KeyCode::Char('6'))).unwrap();
+        assert_eq!(app.session.as_ref().unwrap().cursor, 1);
+        assert_eq!(app.session.as_ref().unwrap().horizontal, 4);
+        app.key(key(KeyCode::Char('8'))).unwrap();
+        app.key(key(KeyCode::Char('4'))).unwrap();
+        assert_eq!(app.session.as_ref().unwrap().cursor, 0);
+        assert_eq!(app.session.as_ref().unwrap().horizontal, 0);
+    }
+
+    #[test]
+    fn section_merge_can_jump_or_keep_the_cursor_in_both_directions() {
+        for jump in [false, true] {
+            for (binding, to) in [('L', 1), ('H', 0)] {
+                let mut app = app_with_text("");
+                app.config.jump_after_merge = jump;
+                app.session = Some(Session::new(
+                    "sample.txt".into(),
+                    [
+                        Document::from_bytes(Some(b"start\nleft\nsame\nlast left\n".to_vec())),
+                        Document::from_bytes(Some(b"start\nright\nsame\nlast right\n".to_vec())),
+                    ],
+                    false,
+                ));
+                app.key(key(KeyCode::Char(binding))).unwrap();
+                let session = app.session.as_ref().unwrap();
+                assert_eq!(session.cursor, if jump { 3 } else { 1 });
+                assert_eq!(session.docs[to].lines[1], session.docs[1 - to].lines[1]);
+                assert_eq!(session.diff.hunks.len(), 1);
+                assert!(session.docs[to].dirty());
+                app.key(key(KeyCode::Char('u'))).unwrap();
+                assert_eq!(app.session.as_ref().unwrap().cursor, 1);
+                assert!(!app.session.as_ref().unwrap().dirty());
+            }
+        }
     }
 
     #[test]

@@ -24,7 +24,7 @@ BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/lazymerge").re
 
 
 class Tui:
-    def __init__(self, arguments):
+    def __init__(self, arguments, environment=None):
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
         self.process = subprocess.Popen(
@@ -32,7 +32,7 @@ class Tui:
             stdin=slave,
             stdout=slave,
             stderr=slave,
-            env={**os.environ, "TERM": "xterm-256color"},
+            env={**os.environ, "TERM": "xterm-256color", **(environment or {})},
         )
         os.close(slave)
         self.output = b""
@@ -118,7 +118,6 @@ class Tui:
 
 def main():
     assert subprocess.run([str(BINARY), "--help"], capture_output=True, check=True).stdout
-    assert b"return {" in subprocess.run([str(BINARY), "--print-config"], capture_output=True, check=True).stdout
     with tempfile.TemporaryDirectory(prefix="lazymerge-pty-") as temporary:
         root = Path(temporary)
         left, right = root / "left q folder", root / "right folder"
@@ -126,6 +125,40 @@ def main():
         right.mkdir()
         (left / "demo.txt").write_bytes(b"same\nleft\nend\n")
         (right / "demo.txt").write_bytes(b"same\r\nright\r\nend\r\n")
+        config_home = root / "config home"
+        environment = {"XDG_CONFIG_HOME": str(config_home)}
+        process_environment = {**os.environ, **environment}
+        default_config = config_home / "lazymerge" / "config.lua"
+        defaults = subprocess.run([str(BINARY), "--print-config"], env=process_environment,
+                                  capture_output=True, check=True).stdout
+        assert b"scroll_left" in defaults and b"jump_after_merge" in defaults
+        assert not config_home.exists(), "Printing config must not create a file"
+        tui = Tui([left, right], environment)
+        try:
+            tui.wait_for("Compared 1 files")
+            assert default_config.read_bytes() == defaults
+            tui.quit()
+        finally:
+            tui.close()
+        customized = b"return { show_logo = false, jump_after_merge = false }\n"
+        default_config.write_bytes(customized)
+        tui = Tui([left, right], environment)
+        try:
+            tui.wait_for("Compared 1 files")
+            assert default_config.read_bytes() == customized
+            tui.quit()
+        finally:
+            tui.close()
+        default_config.write_bytes(b"not valid Lua!!!")
+        reset = subprocess.run([str(BINARY), "--reset-config"], env=process_environment,
+                               text=True, capture_output=True, check=True)
+        assert str(default_config) in reset.stdout
+        assert default_config.read_bytes() == defaults
+        custom_config = root / "custom settings" / "config.lua"
+        subprocess.run([str(BINARY), "--reset-config", "--config", str(custom_config)],
+                       env=process_environment, capture_output=True, check=True)
+        assert custom_config.read_bytes() == defaults
+
         config = root / "config.lua"
         config.write_text("return { show_logo = true, poll_seconds = 1 }")
 
@@ -191,7 +224,7 @@ def main():
                 tui.quit()
             finally:
                 tui.close()
-    print("PTY smoke tests passed: startup/completion, Shift+f, Alt+Enter, save both, auto-refresh/conflicts, mouse, focus, confirmed quit")
+    print("PTY smoke tests passed: config creation/reset, startup/completion, Shift+f, Alt+Enter, save both, auto-refresh/conflicts, mouse, focus, confirmed quit")
 
 
 if __name__ == "__main__":

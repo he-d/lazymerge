@@ -8,15 +8,19 @@ use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Debug, Deserialize)]
+pub const DEFAULT_CONFIG: &str = include_str!("../config.example.lua");
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub show_logo: bool,
     pub differences_only: bool,
     pub ignore_whitespace: bool,
+    pub jump_after_merge: bool,
     pub include: String,
     pub exclude: String,
     pub left_label: String,
@@ -36,6 +40,7 @@ impl Default for Config {
             show_logo: true,
             differences_only: false,
             ignore_whitespace: false,
+            jump_after_merge: true,
             include: String::new(),
             exclude: ".git;.vs;node_modules;target".into(),
             left_label: "Left".into(),
@@ -54,10 +59,10 @@ pub fn default_keys() -> BTreeMap<String, String> {
     [
         ("quit", "q"),
         ("help", "?"),
-        ("down", "j"),
-        ("up", "k"),
-        ("expand", "l"),
-        ("collapse", "h"),
+        ("scroll_down", "j"),
+        ("scroll_up", "k"),
+        ("scroll_right", "l"),
+        ("scroll_left", "h"),
         ("open", "enter"),
         ("reload", "r"),
         ("expand_all", "e"),
@@ -94,21 +99,30 @@ pub fn default_keys() -> BTreeMap<String, String> {
 
 impl Config {
     pub fn load(explicit: Option<&Path>) -> Result<Self> {
-        let path = explicit.map(Path::to_path_buf).or_else(default_path);
-        let Some(path) = path else {
-            return Ok(Self::default());
-        };
-        let source = match fs::read_to_string(&path) {
+        let path = config_path(explicit)?;
+        Self::load_path(&path, explicit.is_none())
+    }
+
+    fn load_path(path: &Path, create_missing: bool) -> Result<Self> {
+        let source = match fs::read_to_string(path) {
             Ok(source) => source,
-            Err(error) if explicit.is_none() && error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
+            Err(error) if create_missing && error.kind() == ErrorKind::NotFound => {
+                write_defaults(path, false)?;
+                fs::read_to_string(path)
+                    .with_context(|| format!("Reading config {}", path.display()))?
             }
             Err(error) => {
                 return Err(error).with_context(|| format!("Reading config {}", path.display()));
             }
         };
         Self::from_lua(&source, &path.to_string_lossy())
-            .with_context(|| format!("Invalid config {}", path.display()))
+            .with_context(|| format!("Invalid config {}. Use --reset-config to restore defaults (with --config FILE for a custom path)", path.display()))
+    }
+
+    pub fn reset(explicit: Option<&Path>) -> Result<PathBuf> {
+        let path = config_path(explicit)?;
+        write_defaults(&path, true)?;
+        Ok(path)
     }
 
     fn from_lua(source: &str, name: &str) -> Result<Self> {
@@ -124,6 +138,19 @@ impl Config {
         let mut config: Self = lua
             .from_value(value)
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        // Older config files used tree-specific names for the same navigation keys.
+        for (old, new) in [
+            ("down", "scroll_down"),
+            ("up", "scroll_up"),
+            ("expand", "scroll_right"),
+            ("collapse", "scroll_left"),
+        ] {
+            if let Some(binding) = config.keys.remove(old)
+                && config.keys.insert(new.into(), binding).is_some()
+            {
+                bail!("Use keys.{new} only; keys.{old} is its legacy name");
+            }
+        }
         let defaults = default_keys();
         for action in config.keys.keys() {
             if !defaults.contains_key(action) {
@@ -202,17 +229,63 @@ impl Config {
 }
 
 pub fn default_path() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            #[cfg(windows)]
-            if let Some(app_data) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
-                return Some(PathBuf::from(app_data));
-            }
-            crate::input::home_dir().map(|home| home.join(".config"))
+    default_path_for(
+        std::env::consts::OS,
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        crate::input::home_dir(),
+    )
+}
+
+fn default_path_for(
+    platform: &str,
+    xdg_config: Option<PathBuf>,
+    local_app_data: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    xdg_config
+        .filter(|path| !path.as_os_str().is_empty())
+        .or_else(|| match platform {
+            "windows" => local_app_data
+                .filter(|path| !path.as_os_str().is_empty())
+                .or_else(|| home.map(|home| home.join("AppData/Local"))),
+            "macos" => home.map(|home| home.join("Library/Application Support")),
+            _ => home.map(|home| home.join(".config")),
         })
         .map(|base| base.join("lazymerge/config.lua"))
+}
+
+fn config_path(explicit: Option<&Path>) -> Result<PathBuf> {
+    explicit
+        .map(Path::to_path_buf)
+        .or_else(default_path)
+        .context("Cannot determine the config path; set XDG_CONFIG_HOME or use --config FILE")
+}
+
+fn write_defaults(path: &Path, overwrite: bool) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)
+        .with_context(|| format!("Creating config directory {}", parent.display()))?;
+    // Publish the complete file atomically. Startup must never replace an existing config.
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("Creating config {}", path.display()))?;
+    temporary.write_all(DEFAULT_CONFIG.as_bytes())?;
+    temporary.as_file().sync_all()?;
+    let result = if overwrite {
+        temporary.persist(path)
+    } else {
+        temporary.persist_noclobber(path)
+    };
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) if !overwrite && error.error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => {
+            Err(error.error).with_context(|| format!("Writing config {}", path.display()))
+        }
+    }
 }
 
 type Binding = (KeyCode, KeyModifiers);
@@ -297,7 +370,7 @@ pub const COLOR_NAMES: [&str; 15] = [
     "warning",
 ];
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Theme {
     pub bg: String,
@@ -397,7 +470,7 @@ mod tests {
         );
         assert_eq!(
             config.action(&KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
-            Some("down")
+            Some("scroll_down")
         );
     }
 
@@ -441,7 +514,105 @@ mod tests {
 
     #[test]
     fn example_is_valid() {
-        Config::from_lua(include_str!("../config.example.lua"), "config.example.lua").unwrap();
+        assert_eq!(
+            Config::from_lua(DEFAULT_CONFIG, "config.example.lua").unwrap(),
+            Config::default()
+        );
+    }
+
+    #[test]
+    fn missing_default_is_created_and_existing_settings_are_preserved() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested/lazymerge/config.lua");
+        assert_eq!(Config::load_path(&path, true).unwrap(), Config::default());
+        assert_eq!(fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
+        let custom = "return { show_logo = false, jump_after_merge = false }\n";
+        fs::write(&path, custom).unwrap();
+        let config = Config::load_path(&path, true).unwrap();
+        assert!(!config.show_logo);
+        assert!(!config.jump_after_merge);
+        assert_eq!(fs::read_to_string(&path).unwrap(), custom);
+        // Another process creating a config during startup must not lose its settings.
+        write_defaults(&path, false).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), custom);
+    }
+
+    #[test]
+    fn broken_config_is_preserved_until_reset_and_missing_custom_paths_are_not_created() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("custom/config.lua");
+        assert!(Config::load(Some(&path)).is_err());
+        assert!(!path.exists());
+        assert_eq!(Config::reset(Some(&path)).unwrap(), path);
+        assert_eq!(fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
+        fs::write(&path, "not valid Lua!!!").unwrap();
+        let error = Config::load_path(&path, true).unwrap_err();
+        assert!(error.to_string().contains("--reset-config"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "not valid Lua!!!");
+        // Reset must work even when the old file is not valid text or Lua.
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+        Config::reset(Some(&path)).unwrap();
+        assert_eq!(Config::load(Some(&path)).unwrap(), Config::default());
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn platform_config_paths_use_xdg_local_app_data_and_native_home_directories() {
+        for (platform, expected) in [
+            ("linux", "home/.config/lazymerge/config.lua"),
+            ("windows", "local/lazymerge/config.lua"),
+            (
+                "macos",
+                "home/Library/Application Support/lazymerge/config.lua",
+            ),
+        ] {
+            assert_eq!(
+                default_path_for(platform, None, Some("local".into()), Some("home".into())),
+                Some(PathBuf::from(expected))
+            );
+            assert_eq!(
+                default_path_for(platform, Some("xdg".into()), Some("local".into()), None),
+                Some(PathBuf::from("xdg/lazymerge/config.lua"))
+            );
+        }
+        assert_eq!(
+            default_path_for(
+                "windows",
+                Some("".into()),
+                Some("".into()),
+                Some("home".into())
+            ),
+            Some(PathBuf::from("home/AppData/Local/lazymerge/config.lua"))
+        );
+        assert_eq!(default_path_for("linux", None, None, None), None);
+    }
+
+    #[test]
+    fn navigation_names_support_custom_bindings_and_legacy_configs() {
+        for source in [
+            "return { keys = { scroll_down = '2', scroll_up = '8', scroll_left = '4', scroll_right = '6' } }",
+            "return { keys = { down = '2', up = '8', collapse = '4', expand = '6' } }",
+        ] {
+            let config = Config::from_lua(source, "navigation.lua").unwrap();
+            for (character, action) in [
+                ('2', "scroll_down"),
+                ('8', "scroll_up"),
+                ('4', "scroll_left"),
+                ('6', "scroll_right"),
+            ] {
+                assert_eq!(
+                    config.action(&KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE)),
+                    Some(action)
+                );
+            }
+        }
+        assert!(
+            Config::from_lua(
+                "return { keys = { down = 'j', scroll_down = '2' } }",
+                "ambiguous.lua"
+            )
+            .is_err()
+        );
     }
 
     #[test]

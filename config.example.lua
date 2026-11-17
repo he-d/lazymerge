@@ -1,4 +1,8 @@
--- Save as $XDG_CONFIG_HOME/lazymerge/config.lua, or ~/.config/lazymerge/config.lua.
+-- Created automatically on first start. Edit this file to change your defaults.
+-- Linux: $XDG_CONFIG_HOME/lazymerge/config.lua, or ~/.config/lazymerge/config.lua.
+-- Windows: %LOCALAPPDATA%\lazymerge\config.lua. macOS: ~/Library/Application Support/lazymerge/config.lua.
+-- XDG_CONFIG_HOME overrides the default on every platform.
+-- Restore defaults with: lazymerge --reset-config (overwrites this file).
 -- Alternatively: lazymerge --config /path/to/config.lua left right
 -- Return a Lua table. Omitted settings and nested colors/keys keep their defaults.
 -- This is executable Lua: expressions and local variables work here.
@@ -6,6 +10,7 @@ return {
   show_logo = true,           -- centered ASCII logo; a compact header stays in small terminals
   differences_only = false,  -- hide identical and minor (EOL/BOM/whitespace-only) changes
   ignore_whitespace = false,
+  jump_after_merge = true,   -- L/H and mouse section merges: false keeps the cursor in place
   include = "",              -- e.g. "*.rs;*.json"; blank means all files
   exclude = ".git;.vs;node_modules;target",
   left_label = "Left",
@@ -31,7 +36,7 @@ return {
     removed = "#43242B",
     changed = "#49443C",
     accent = "#E6C384",
-    warning = "#FFA066",       -- Kanagawa surimiOrange: file-change notice border
+    warning = "#FFA066",
   },
 
   -- Map an action to one key: characters preserve case; modifiers use +.
@@ -40,10 +45,12 @@ return {
   -- Quit always asks for confirmation. Text fields retain normal typing behavior.
   -- Alt+s always saves both sides of an open file, including in the editor.
   keys = {
-    quit = "q", help = "?", down = "j", up = "k",
-    expand = "l", collapse = "h", open = "enter", reload = "r",
+    quit = "q", help = "?",
+    scroll_down = "j", scroll_up = "k", scroll_left = "h", scroll_right = "l",
+    -- In the folder tree, scroll_left/scroll_right collapse/expand folders.
+    open = "enter", reload = "r",
     expand_all = "e", collapse_all = "c", all = "a", differences = "d",
-    find = "/", copy_right = "alt+l", copy_left = "alt+h",
+    find = "/", copy_right = "alt+l", copy_left = "alt+h", -- tree: copy; diff: merge whole file
     merge_right = "L", merge_left = "H", edit_left = "i", edit_right = "I",
     undo = "u", save_left = "ctrl+s", save_right = "ctrl+alt+s", save_both = "alt+s",
     accept_edit = "alt+enter", -- Ctrl+Enter also applies if the terminal delivers it

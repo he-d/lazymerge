@@ -703,7 +703,7 @@ mod tests {
         )
         .unwrap();
         let mut session = roots.open(Path::new("folder/file"), false).unwrap();
-        session.merge(1, true, false).unwrap();
+        session.merge(1, true, false, true).unwrap();
         assert!(session.docs[1].dirty());
         roots.save(&mut session, 1, false).unwrap();
         assert_eq!(
@@ -729,7 +729,7 @@ mod tests {
         let mut session = roots.open(Path::new("empty"), false).unwrap();
         roots.save(&mut session, 1, false).unwrap();
         assert!(!roots.paths[1].join("empty").exists());
-        session.merge(1, true, false).unwrap();
+        session.merge(1, true, false, true).unwrap();
         assert!(session.docs[1].dirty());
         assert!(!roots.paths[1].join("empty").exists());
         roots.save(&mut session, 1, false).unwrap();
@@ -745,7 +745,7 @@ mod tests {
         fs::write(roots.paths[1].join("file"), b"\xef\xbb\xbfold\r\n").unwrap();
         let mut session = roots.open(Path::new("file"), false).unwrap();
         assert!(session.docs[0].readonly);
-        session.merge(1, true, false).unwrap();
+        session.merge(1, true, false, true).unwrap();
         roots.save(&mut session, 1, false).unwrap();
         assert_eq!(fs::read(roots.paths[0].join("file")).unwrap(), source);
         assert_eq!(
@@ -773,7 +773,7 @@ mod tests {
         fs::write(roots.paths[0].join("script"), b"#!/bin/sh\n").unwrap();
         fs::set_permissions(roots.paths[0].join("script"), Permissions::from_mode(0o755)).unwrap();
         let mut session = roots.open(Path::new("script"), false).unwrap();
-        session.merge(1, true, false).unwrap();
+        session.merge(1, true, false, true).unwrap();
         roots.save(&mut session, 1, false).unwrap();
         assert_eq!(
             fs::metadata(roots.paths[1].join("script"))
@@ -807,7 +807,7 @@ mod tests {
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("file"), b"untouched").unwrap();
         let mut session = roots.open(Path::new("nested/file"), false).unwrap();
-        session.merge(1, true, false).unwrap();
+        session.merge(1, true, false, true).unwrap();
         symlink(&outside, roots.paths[1].join("nested")).unwrap();
         assert!(roots.save(&mut session, 1, true).is_err());
         assert_eq!(fs::read(outside.join("file")).unwrap(), b"untouched");

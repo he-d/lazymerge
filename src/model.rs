@@ -402,7 +402,13 @@ impl Session {
         }
     }
 
-    pub fn merge(&mut self, to: usize, all: bool, ignore_whitespace: bool) -> Result<()> {
+    pub fn merge(
+        &mut self,
+        to: usize,
+        all: bool,
+        ignore_whitespace: bool,
+        jump_after_merge: bool,
+    ) -> Result<()> {
         if to > 1 {
             bail!("Invalid side");
         }
@@ -451,7 +457,8 @@ impl Session {
         self.docs[to].final_newline = final_newline;
         self.docs[to].pending_create |= create;
         self.refresh_diff(ignore_whitespace);
-        if let Some(index) = next_hunk
+        if jump_after_merge
+            && let Some(index) = next_hunk
             && let Some(next) = self
                 .diff
                 .hunks
@@ -591,7 +598,7 @@ mod tests {
     #[test]
     fn section_merge_is_staged_preserves_target_format_and_undoes() {
         let mut s = session(b"start\nnew\nend\n", b"\xef\xbb\xbfstart\r\nold\r\nend\r\n");
-        s.merge(1, false, false).unwrap();
+        s.merge(1, false, false, true).unwrap();
         assert!(s.docs[1].dirty());
         assert_eq!(s.docs[1].encode(), b"\xef\xbb\xbfstart\r\nnew\r\nend\r\n");
         assert_eq!(
@@ -608,7 +615,7 @@ mod tests {
         let mut s = session(b"a\nb\nc\n", b"x\ny\nz\n");
         s.cursor = 1;
         s.anchor = Some(1);
-        s.merge(1, false, false).unwrap();
+        s.merge(1, false, false, true).unwrap();
         assert_eq!(s.docs[1].lines, ["x", "b", "z"]);
         assert!(s.anchor.is_none());
     }
@@ -618,11 +625,11 @@ mod tests {
         let mut s = session(b"same", b"same\n");
         assert_eq!(s.diff.hunks.len(), 1);
         assert!(s.diff.rows[s.cursor].left.is_none());
-        s.merge(1, false, false).unwrap();
+        s.merge(1, false, false, true).unwrap();
         assert_eq!(s.docs[1].encode(), b"same");
         assert!(s.diff.hunks.is_empty());
         s.undo();
-        s.merge(0, true, false).unwrap();
+        s.merge(0, true, false, true).unwrap();
         assert_eq!(s.docs[0].encode(), b"same\n");
     }
 
@@ -634,7 +641,7 @@ mod tests {
             false,
         );
         assert!(!s.docs[1].dirty());
-        s.merge(1, true, false).unwrap();
+        s.merge(1, true, false, true).unwrap();
         assert_eq!(s.docs[1].encode(), b"\xef\xbb\xbfnew\r\n");
         assert!(s.docs[1].dirty());
         s.undo();
@@ -644,14 +651,14 @@ mod tests {
             [doc(b""), Document::from_bytes(None)],
             false,
         );
-        empty.merge(1, true, false).unwrap();
+        empty.merge(1, true, false, true).unwrap();
         assert!(empty.docs[1].dirty());
     }
 
     #[test]
     fn undo_after_save_keeps_latest_disk_baseline() {
         let mut s = session(b"new\n", b"old\n");
-        s.merge(1, true, false).unwrap();
+        s.merge(1, true, false, true).unwrap();
         s.docs[1].baseline = Some(s.docs[1].encode());
         assert!(!s.docs[1].dirty());
         s.undo();
@@ -669,7 +676,7 @@ mod tests {
         s.replace(0, 0..1, "replacement\n", false).unwrap();
         assert_eq!(s.docs[0].encode(), b"replacement\nlast\n");
         assert!(s.replace(1, 0..0, "text", false).is_err());
-        assert!(s.merge(1, true, false).is_err());
+        assert!(s.merge(1, true, false, true).is_err());
     }
 
     #[test]
@@ -696,7 +703,7 @@ mod tests {
                     );
                     remaining -= 1;
                     s.cursor = hunk.rows.start;
-                    s.merge(1, false, false).unwrap();
+                    s.merge(1, false, false, true).unwrap();
                 }
                 assert_eq!(s.docs[0].lines, s.docs[1].lines);
                 assert_eq!(s.docs[0].final_newline, s.docs[1].final_newline);
