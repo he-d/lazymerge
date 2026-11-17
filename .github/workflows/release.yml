@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: ${{ matrix.target }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_REF: ${{ github.ref }}
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check release versions
+        run: |
+          python - <<'PY'
+          import os, re
+          from pathlib import Path
+          manifest = Path('Cargo.toml').read_text()
+          version = re.search(r'^version = "([^"]+)"', manifest, re.M).group(1)
+          html = Path('lazymerge.html').read_text()
+          assert f'>v{version}</span>' in html, 'HTML and Cargo versions must match'
+          if os.environ['RELEASE_REF'].startswith('refs/tags/'):
+              assert os.environ['RELEASE_TAG'] == f'v{version}', 'Tag must match Cargo version'
+          PY
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+          rustup default stable
+          rustup target add "$TARGET"
+      - name: Install musl compiler
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+      - name: Test source
+        run: |
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo fmt --all --check
+      - name: Test Unix installer
+        if: runner.os != 'Windows'
+        run: python3 tests/test_install.py
+      - name: Test terminal interactions
+        if: runner.os != 'Windows'
+        run: |
+          cargo build --locked
+          python3 tests/pty_smoke.py
+      - name: Test Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/test_install.ps1
+      - name: Build binary
+        run: |
+          if [[ "$TARGET" == *-linux-musl ]]; then
+            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+            export CC_x86_64_unknown_linux_musl=musl-gcc
+            export CC_aarch64_unknown_linux_musl=musl-gcc
+          elif [[ "$TARGET" == *-windows-msvc ]]; then
+            export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static"
+          elif [[ "$TARGET" == *-apple-darwin ]]; then
+            export MACOSX_DEPLOYMENT_TARGET=11.0
+          fi
+          cargo build --release --locked --target "$TARGET"
+      - name: Package binary
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, tarfile, zipfile
+          from pathlib import Path
+          target = os.environ['TARGET']
+          windows = 'windows' in target
+          binary = 'lazymerge.exe' if windows else 'lazymerge'
+          executable = Path('target') / target / 'release' / binary
+          version = re.search(r'^version = "([^"]+)"', Path('Cargo.toml').read_text(), re.M).group(1)
+          assert subprocess.check_output([str(executable), '--version'], text=True).strip() == f'lazymerge {version}'
+          output = Path('dist')
+          output.mkdir()
+          extras = ['LICENSE', 'README.md', 'config.example.lua']
+          if windows:
+              with zipfile.ZipFile(output / f'lazymerge-{target}.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+                  archive.write(executable, binary)
+                  for file in extras:
+                      archive.write(file, file)
+          else:
+              with tarfile.open(output / f'lazymerge-{target}.tar.gz', 'w:gz') as archive:
+                  archive.add(executable, arcname=binary)
+                  for file in extras:
+                      archive.add(file, arcname=file)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lazymerge-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lazymerge-*
+          merge-multiple: true
+          path: dist
+      - name: Include browser app and installer files
+        run: cp lazymerge.html config.example.lua install.sh install.ps1 README.md LICENSE dist/
+      - name: Generate checksums
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          directory = Path('dist')
+          lines = [f'{hashlib.sha256(file.read_bytes()).hexdigest()}  {file.name}\n'
+                   for file in sorted(directory.iterdir()) if file.is_file()]
+          (directory / 'SHA256SUMS').write_text(''.join(lines), encoding='ascii')
+          PY
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --title "LazyMerge $RELEASE_TAG" --generate-notes dist/*

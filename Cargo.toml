@@ -1,0 +1,23 @@
+[package]
+name = "lazymerge"
+version = "0.1.1"
+edition = "2024"
+description = "Keyboard-first, side-by-side folder comparison and merging"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+encoding_rs = "0.8"
+globset = "0.4"
+mlua = { version = "0.12", features = ["lua54", "vendored", "serde"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+serde = { version = "1", features = ["derive"] }
+similar = "3"
+tempfile = "3"
+unicode-width = "0.2"
+
+[profile.release]
+lto = "thin"
+strip = true

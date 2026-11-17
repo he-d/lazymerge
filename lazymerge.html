@@ -41,6 +41,7 @@ input:focus-visible,textarea:focus-visible,.btn:focus-visible,.tbtn:focus-visibl
 .btn.dirty:hover:not(:disabled){background:color-mix(in srgb,var(--autumnGreen) 30%,var(--sumiInk4))}
 .btn.stale{background:color-mix(in srgb,var(--surimiOrange) 16%,var(--sumiInk4));border-color:var(--surimiOrange);color:var(--surimiOrange);font-weight:600}
 .btn.stale:hover:not(:disabled){background:color-mix(in srgb,var(--surimiOrange) 28%,var(--sumiInk4))}
+.disk-notice{border:1px solid var(--surimiOrange);color:var(--surimiOrange);border-radius:4px;padding:1px 6px}
 .grow{flex:1}
 
 /* toolbar */
@@ -191,12 +192,12 @@ main:not(.split) #split,main:not(.split) .dv{display:none}
   <span class="sep"></span>
   <div class="flt">
     <label>Find <input type="text" id="find" spellcheck="false" placeholder="file name" title="Show only files whose name contains this text, while you type (/). Enter goes to the list, Esc clears it. Unlike Filter, nothing is read again."></label>
-    <label>Filter <input type="text" id="include" spellcheck="false" title="File name patterns separated by ; (e.g. *.al;*.xlf). *.* = all files. Press Enter to apply."></label>
+    <label>Filter <input type="text" id="include" spellcheck="false" title="File name patterns separated by ; (e.g. *.rs;*.json). *.* = all files. Press Enter to apply."></label>
     <label>Exclude <input type="text" id="exclude" spellcheck="false" title="File or folder names to skip, separated by ; (wildcards * and ?). Press Enter to apply."></label>
     <label class="chk" title="Lines that differ only in spaces/tabs count as equal"><input type="checkbox" id="ignoreWs"> Ignore whitespace</label>
   </div>
   <span class="grow"></span>
-  <span class="ver" id="appVer" title="LazyMerge version">v0.1.14</span>
+  <span class="ver" id="appVer" title="LazyMerge version">v0.1.1</span>
 </header>
 <div class="paths">
   <div class="pth">
@@ -246,7 +247,7 @@ main:not(.split) #split,main:not(.split) .dv{display:none}
     </div>
     <div class="dv-bin" id="dvBin" hidden>Binary file or not readable as text. Use Copy &#8594; / &#8592; Copy in the toolbar to copy the whole file.</div>
     <div class="dv-hb" id="dvHb"><div class="hb" id="hbL"><div></div></div><div class="hb" id="hbR"><div></div></div></div>
-    <div class="dv-status"><span id="dvInfo"></span><span class="grow"></span><span>n / N next / previous &middot; / find &middot; v mark lines &middot; L / H copy &#8594; / &#8592; &middot; Alt+l / Alt+h whole file &middot; i / I edit &middot; u undo &middot; r reload &middot; Alt+S save &middot; Esc close</span></div>
+    <div class="dv-status"><span id="dvInfo"></span><span class="disk-notice" id="diskNotice" role="status" hidden>Files changed on disk &middot; Reload (r)</span><span class="grow"></span><span>n / N next / previous &middot; / find &middot; v mark lines &middot; L / H copy &#8594; / &#8592; &middot; Alt+l / Alt+h whole file &middot; i / I edit &middot; u undo &middot; r reload &middot; Alt+S save &middot; Esc close</span></div>
   </section>
 </main>
 
@@ -322,7 +323,7 @@ var LM = (function () {
 
   // --- Name patterns ---------------------------------------------------------
 
-  // 'a*;*.xlf' -> function(name) (case-insensitive, *.* = everything)
+  // '*.rs;*.json' -> function(name) (case-insensitive, *.* = everything)
   function globTester(list) {
     var rx = String(list || '').split(/[;,]/).map(function (p) { return p.trim(); }).filter(Boolean).map(function (p) {
       if (p === '*.*') p = '*';
@@ -757,7 +758,7 @@ var LM = (function () {
   };
   var DEFAULTS = {
     include: '*.*',
-    exclude: '.git;.alpackages;.vs;node_modules',
+    exclude: '.git;.vs;node_modules',
     ignoreWs: false,
     filter: 'all',
     labelL: '',
@@ -1340,6 +1341,8 @@ var LM = (function () {
     $('saveR').classList.toggle('dirty', !$('saveR').disabled);
     var stale = v && v.stale ? ['L', 'R'].filter(function (s) { return v.stale[s]; }) : [];
     $('dvReload').classList.toggle('stale', stale.length > 0);
+    $('diskNotice').hidden = stale.length === 0;
+    $('diskNotice').title = stale.length ? 'Changed on disk: ' + stale.map(label).join(', ') : '';
     $('dvReload').title = stale.length ? 'Changed on disk since it was loaded: ' + stale.map(label).join(', ') + ' – read it again (r)' : 'Read both files again from disk (r)';
     updateButtons();
   }
