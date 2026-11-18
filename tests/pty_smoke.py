@@ -102,12 +102,27 @@ class Tui:
         self.send("q")
         self.wait_for("Quit LazyMerge?")
         self.send("\r")  # No is selected by default.
-        time.sleep(0.15)
+        self.wait_for("Quit LazyMerge?", present=False)
         assert self.process.poll() is None, "Enter must not silently accept quit"
         self.send("q")
         self.wait_for("Quit LazyMerge?")
         self.send("y")
-        assert self.process.wait(timeout=5) == 0
+        assert self.wait_for_exit() == 0
+
+    def wait_for_exit(self, timeout=5):
+        # Keep reading: macOS PTYs buffer less than Linux, so unread output would block the exit.
+        start = time.monotonic()
+        while self.process.poll() is None:
+            if time.monotonic() - start >= timeout:
+                raise AssertionError("TUI did not exit:\n" + "\n".join("".join(row) for row in self.screen))
+            if select.select([self.master], [], [], 0.1)[0]:
+                try:
+                    output = os.read(self.master, 65536)
+                except OSError:
+                    continue
+                self.output += output
+                self.feed(output)
+        return self.process.returncode
 
     def close(self):
         if self.process.poll() is None:
