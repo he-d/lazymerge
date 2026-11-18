@@ -92,7 +92,7 @@
         [IO.File]::Copy($candidate, $staged)
         try {
             if ([IO.File]::Exists($destination)) {
-                [IO.File]::Replace($staged, $destination, $null)
+                [IO.File]::Replace($staged, $destination, [NullString]::Value)
             } else {
                 [IO.File]::Move($staged, $destination)
             }

@@ -25,7 +25,7 @@ class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix='lazymerge-installer-test-')
         self.addCleanup(self.directory.cleanup)
-        self.root = Path(self.directory.name)
+        self.root = Path(self.directory.name).resolve()
         self.fixtures = self.root / 'release assets'
         self.fixtures.mkdir()
         self.mock_bin = self.root / 'commands'

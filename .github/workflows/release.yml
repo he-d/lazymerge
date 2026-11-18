@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-22.04
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
@@ -44,9 +44,9 @@ jobs:
           python - <<'PY'
           import os, re
           from pathlib import Path
-          manifest = Path('Cargo.toml').read_text()
+          manifest = Path('Cargo.toml').read_text(encoding='utf-8')
           version = re.search(r'^version = "([^"]+)"', manifest, re.M).group(1)
-          html = Path('lazymerge.html').read_text()
+          html = Path('lazymerge.html').read_text(encoding='utf-8')
           assert f'>v{version}</span>' in html, 'HTML and Cargo versions must match'
           if os.environ['RELEASE_REF'].startswith('refs/tags/'):
               assert os.environ['RELEASE_TAG'] == f'v{version}', 'Tag must match Cargo version'
@@ -100,7 +100,7 @@ jobs:
           windows = 'windows' in target
           binary = 'lazymerge.exe' if windows else 'lazymerge'
           executable = Path('target') / target / 'release' / binary
-          version = re.search(r'^version = "([^"]+)"', Path('Cargo.toml').read_text(), re.M).group(1)
+          version = re.search(r'^version = "([^"]+)"', Path('Cargo.toml').read_text(encoding='utf-8'), re.M).group(1)
           assert subprocess.check_output([str(executable), '--version'], text=True).strip() == f'lazymerge {version}'
           output = Path('dist')
           output.mkdir()
