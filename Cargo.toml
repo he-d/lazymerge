@@ -1,6 +1,6 @@
 [package]
 name = "lazymerge"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "Keyboard-first, side-by-side folder comparison and merging"
 license = "MIT"

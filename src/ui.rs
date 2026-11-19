@@ -584,7 +584,24 @@ fn diff(frame: &mut Frame, app: &mut App, area: Rect) {
                             1,
                         ),
                     );
-                } else if row.left.is_none() && row.right.is_none() {
+                } else if other.is_some() {
+                    // A line missing on this side: red diagonal stripes, like the
+                    // browser app's hatched gaps.
+                    let (stripes, ground) = if selected {
+                        ("removed", "selected")
+                    } else {
+                        ("bg", "removed")
+                    };
+                    let width = col.width.saturating_sub(gutter_width);
+                    frame.render_widget(
+                        Paragraph::new("╱".repeat(width as usize)).style(
+                            Style::default()
+                                .fg(app.config.colors.color(stripes))
+                                .bg(app.config.colors.color(ground)),
+                        ),
+                        Rect::new(col.x + gutter_width, y, width, 1),
+                    );
+                } else {
                     frame.render_widget(
                         Paragraph::new(if s.docs[side].final_newline {
                             "↵ final newline"
@@ -1178,9 +1195,12 @@ fn help(frame: &mut Frame, app: &App) {
             Style::default().fg(app.config.colors.color("accent")),
         ),
         Line::raw(""),
-        Line::raw("Folders: Enter open · arrows navigate · PageUp/PageDown scroll"),
+        Line::raw(
+            "Folders: Enter open · arrows navigate · gg/G top/bottom · PageUp/PageDown scroll",
+        ),
         Line::raw("Diff: arrows navigate/scroll · gg/G top/bottom · Ctrl+d/u half page"),
         Line::raw("Diff: L/H merge section or selected lines · Alt+l/h merge all"),
+        Line::raw("Diff: dh/dl delete the left/right line or selected lines · u undo"),
         Line::raw("Editor: Alt+Enter apply · Alt+s save both · Esc cancel · Enter new line"),
         Line::raw("Prompts: Tab / Shift+Tab complete paths · Ctrl+u clear · Ctrl+w word"),
         Line::raw("Confirmations: y accept · n/Esc cancel · Tab choose · Enter accept"),
@@ -1383,6 +1403,49 @@ mod tests {
             .collect::<String>();
         assert!(text.contains("final newline"));
         assert!(text.contains("demo.xml"));
+        assert!(!text.contains('╱'), "no line is missing on either side");
+    }
+
+    #[test]
+    fn missing_lines_are_hatched_red_like_the_browser_app() {
+        let mut app = App::new(Config::default(), None, None).unwrap();
+        app.prompt = None;
+        app.roots = Some(Roots {
+            paths: [PathBuf::from("/left"), PathBuf::from("/right")],
+        });
+        app.session = Some(Session::new(
+            PathBuf::from("gap.txt"),
+            [
+                Document::from_bytes(Some(b"same\ndeleted\nend\n".to_vec())),
+                Document::from_bytes(Some(b"same\nend\n".to_vec())),
+            ],
+            false,
+        ));
+        app.focus = Focus::Diff;
+        let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let hatched: Vec<_> = buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.symbol() == "╱")
+            .collect();
+        assert!(
+            hatched.len() > 20,
+            "the gap right of \"deleted\" is hatched"
+        );
+        // The browser app's colours: stripes of the background on the removed red.
+        assert!(hatched.iter().all(|cell| {
+            cell.fg == app.config.colors.color("bg")
+                && cell.bg == app.config.colors.color("removed")
+        }));
+        let row = (0..32)
+            .find(|&y| (0..100).any(|x| buffer[(x, y)].symbol() == "╱"))
+            .unwrap();
+        let line = (0..100)
+            .map(|x| buffer[(x, row)].symbol())
+            .collect::<String>();
+        assert!(line.contains("deleted"), "{line}");
     }
 
     #[test]

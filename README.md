@@ -7,15 +7,15 @@
   A Rust terminal app and a self-contained HTML app. Both work locally, without a server.
 </p>
 
-Current version: **0.1.3** for both the terminal and browser apps.
+Current version: **0.1.4** for both the terminal and browser apps.
 
 ## Terminal version
 
-The Rust TUI centers the custom violet-and-green ASCII wordmark at the top, with its size calculated from [`src/logo.txt`](src/logo.txt). It uses the HTML app's Kanagawa colours and layout: a shared folder tree above aligned, side-by-side file panes. Smaller terminals get a centered compact header. The version stays visible below the wordmark.
+The Rust TUI centers the custom violet-and-green ASCII wordmark at the top, with its size calculated from [`src/logo.txt`](src/logo.txt). It uses the HTML app's Kanagawa colours and layout: a shared folder tree above aligned, side-by-side file panes. Where a line is missing on one side, that side shows red diagonal stripes, as in the browser app. Smaller terminals get a centered compact header. The version stays visible below the wordmark.
 
 - Compare folders, expand or collapse their trees, search file names, and filter included or excluded files.
 - Distinguish changed files, files present on one side, minor differences (line endings, BOM or ignored whitespace), identical files and read errors.
-- Navigate differing sections, highlight changed characters, select lines, merge in either direction, edit text and undo. Edits stay in memory until saved.
+- Navigate differing sections, highlight changed characters, select lines, merge in either direction, edit or delete lines and undo. Edits stay in memory until saved.
 - Copy a file or a folder's differing/missing files as raw bytes after confirmation. Copies write to disk immediately; they never delete files.
 - Refresh the folder overview and clean open files when files change externally; preserve staged edits and ask before overwriting changed files.
 - Highlight source text in common programming and configuration languages, including multiline comments and strings.
@@ -37,7 +37,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/he-
 
 The installers download a prebuilt binary from [GitHub Releases](https://github.com/he-d/lazymerge/releases), verify its SHA-256 checksum, and install for your user account. No Rust toolchain, Lua installation or administrator access is needed. Rerun the same command to update.
 
-Linux/macOS installs to `~/.local/bin` by default; the installer prints any `PATH` setup needed. Windows installs to `%LOCALAPPDATA%\LazyMerge\bin` and updates your user `PATH`; open a new terminal afterward. Set `LAZYMERGE_INSTALL_DIR` to use another directory or `LAZYMERGE_VERSION=0.1.3` to select a release.
+Linux/macOS installs to `~/.local/bin` by default; the installer prints any `PATH` setup needed. Windows installs to `%LOCALAPPDATA%\LazyMerge\bin` and updates your user `PATH`; open a new terminal afterward. Set `LAZYMERGE_INSTALL_DIR` to use another directory or `LAZYMERGE_VERSION=0.1.4` to select a release.
 
 The download commands require the installer files on `main` and published release binaries; see [Publishing a release](#publishing-a-release). To install directly from a local checkout, install a Rust toolchain and a C compiler, then run:
 
@@ -77,7 +77,7 @@ These are the defaults; `?` opens help showing your configured bindings. `Tab` s
 | `p` | Anywhere outside text fields | Choose folders with path completion |
 | `r` | Tree / diff | Rescan folders / reload both open files; asks before discarding edits |
 | `Alt+l` / `Alt+h` | Tree | Copy the selected file or folder to the right / left, after confirmation |
-| `gg` / `G`, `Home` / `End` | Diff | Start / end of file |
+| `gg` / `G`, `Home` / `End` | Both panes | First / last row; in a file its start / end |
 | `Ctrl+d` / `Ctrl+u` | Diff | Move half a page down / up |
 | `n` / `N` | Diff | Next / previous differing section |
 | `h` / `←`, `l` / `→` | Diff | Scroll horizontally |
@@ -85,6 +85,7 @@ These are the defaults; `?` opens help showing your configured bindings. `Tab` s
 | `L` / `H` | Diff | Merge selected rows, or the current section, to the right / left |
 | `Alt+l` / `Alt+h` | Diff | Stage the whole file on the right / left, including its final newline |
 | `i` / `I` | Diff | Edit the left / right selection, section or line |
+| `dh` / `dl` | Diff | Delete the line on the left / right, or the selected lines on that side; the cursor moves on to that side's next line |
 | `u` | Diff | Undo an edit or merge |
 | `Ctrl+S` | Open file, including editor | Save the left side |
 | `Ctrl+Alt+s` | Open file, including editor | Save the right side |
@@ -135,7 +136,7 @@ return {
 }
 ```
 
-See [`config.example.lua`](config.example.lua) for all settings, colour names and configurable actions. Bindings support characters, named keys and modifiers such as `ctrl+q`, `alt+l` or `f2`; letter case matters. Set a binding to `""` to disable it. Unknown settings, invalid colours and duplicate bindings produce an error. Quit confirmation always remains enabled.
+See [`config.example.lua`](config.example.lua) for all settings, colour names and configurable actions. Bindings support characters, named keys and modifiers such as `ctrl+q`, `alt+l` or `f2`; letter case matters. Two characters such as `gg` or `dl` are typed one after the other, like in vim; `Esc` cancels a started sequence. A sequence's first key cannot also be a single-key binding in the same view; `d` can, because it filters the folder tree while `dh` / `dl` only work in an open file. Older configs with `top = "g"` keep working as `gg`. Set a binding to `""` to disable it. Unknown settings, invalid colours and duplicate bindings produce an error. Quit confirmation always remains enabled.
 
 Navigation bindings are named `scroll_left = "h"`, `scroll_right = "l"`, `scroll_down = "j"` and `scroll_up = "k"`. Left/right scroll file text horizontally; in the folder tree they collapse/expand folders. Up/down move through rows in either view. The older names `collapse`, `expand`, `down` and `up` remain accepted for existing config files; use one name per action.
 
@@ -172,7 +173,7 @@ Run `python3 tests/test_install.py` for the Unix installer's offline integration
 
 ### Publishing a release
 
-The [release workflow](.github/workflows/release.yml) tests and builds native x64/ARM64 binaries for Linux, macOS and Windows. It also runs the terminal smoke tests on Linux and macOS. Linux builds use musl. Pushing a version tag matching both apps, such as `v0.1.3`, publishes the archives, `SHA256SUMS`, browser HTML, installers and example config to GitHub Releases. Installer updates check these release checksums before replacing an existing executable.
+The [release workflow](.github/workflows/release.yml) tests and builds native x64/ARM64 binaries for Linux, macOS and Windows. It also runs the terminal smoke tests on Linux and macOS. Linux builds use musl. Pushing a version tag matching both apps, such as `v0.1.4`, publishes the archives, `SHA256SUMS`, browser HTML, installers and example config to GitHub Releases. Installer updates check these release checksums before replacing an existing executable.
 
 Publish the source and installer scripts on `main` before pushing the release tag. Running the workflow manually builds and checks the packages without publishing a release. The public one-line commands become usable after those files and release assets are published.
 

@@ -518,6 +518,40 @@ impl Session {
         Ok(())
     }
 
+    /// Remove the selected rows, otherwise the cursor row, from one side. The cursor
+    /// moves on to that side's next line, so repeating it works like vim's `dd`.
+    pub fn delete(&mut self, side: usize, ignore_whitespace: bool) -> Result<()> {
+        if side > 1 {
+            bail!("Invalid side");
+        }
+        if self.docs[side].readonly {
+            bail!("This side is read-only");
+        }
+        let rows = self.anchor.map_or(self.cursor..self.cursor + 1, |anchor| {
+            anchor.min(self.cursor)..anchor.max(self.cursor) + 1
+        });
+        let range = self.range(side, rows.clone());
+        if range.is_empty() {
+            bail!("No line to delete on that side");
+        }
+        self.remember(side);
+        self.docs[side].lines.drain(range);
+        // Empty files have no observable final-newline state.
+        if self.docs[side].lines.is_empty() {
+            self.docs[side].final_newline = true;
+        }
+        self.cursor = rows.start;
+        self.refresh_diff(ignore_whitespace);
+        let index = |row: &DiffRow| if side == 0 { row.left } else { row.right };
+        if let Some(offset) = self.diff.rows[self.cursor..]
+            .iter()
+            .position(|row| index(row).is_some())
+        {
+            self.cursor += offset;
+        }
+        Ok(())
+    }
+
     pub fn dirty(&self) -> bool {
         self.docs.iter().any(Document::dirty)
     }
@@ -677,6 +711,34 @@ mod tests {
         assert_eq!(s.docs[0].encode(), b"replacement\nlast\n");
         assert!(s.replace(1, 0..0, "text", false).is_err());
         assert!(s.merge(1, true, false, true).is_err());
+    }
+
+    #[test]
+    fn deleting_lines_is_staged_keeps_the_final_newline_and_moves_to_the_next_line() {
+        let mut s = session(b"a\nb\nc\n", b"a\nb\nc\n");
+        s.cursor = 1;
+        s.delete(0, false).unwrap();
+        assert_eq!(s.docs[0].lines, ["a", "c"]);
+        assert!(s.docs[0].dirty() && !s.docs[1].dirty());
+        // The deleted "b" leaves a gap on the left; the cursor moved on to "c".
+        assert_eq!(s.diff.rows[s.cursor].left, Some(1));
+        s.delete(0, false).unwrap();
+        assert_eq!(s.docs[0].encode(), b"a\n");
+        s.cursor = 1;
+        assert_eq!(s.diff.rows[1].left, None);
+        assert!(s.delete(0, false).is_err());
+        assert!(s.undo() && s.undo());
+        assert!(!s.dirty());
+        s.cursor = 0;
+        s.anchor = Some(1);
+        s.delete(1, false).unwrap();
+        assert_eq!(s.docs[1].encode(), b"c\n");
+        assert!(s.anchor.is_none());
+        assert_eq!(s.cursor, 2);
+        s.delete(1, false).unwrap();
+        assert_eq!(s.docs[1].encode(), b"");
+        assert!(s.docs[1].dirty());
+        assert!(session(b"x\n", b"abc\0").delete(1, false).is_err());
     }
 
     #[test]

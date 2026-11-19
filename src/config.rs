@@ -76,6 +76,8 @@ pub fn default_keys() -> BTreeMap<String, String> {
         ("merge_left", "H"),
         ("edit_left", "i"),
         ("edit_right", "I"),
+        ("delete_left", "dh"),
+        ("delete_right", "dl"),
         ("undo", "u"),
         ("save_left", "ctrl+s"),
         ("save_right", "ctrl+alt+s"),
@@ -84,7 +86,7 @@ pub fn default_keys() -> BTreeMap<String, String> {
         ("next", "n"),
         ("previous", "N"),
         ("select", "v"),
-        ("top", "g"),
+        ("top", "gg"),
         ("bottom", "G"),
         ("paths", "p"),
         ("include", "f"),
@@ -157,6 +159,13 @@ impl Config {
                 bail!("Unknown key action: {action}");
             }
         }
+        // Older configs bound top to one character that was pressed twice in a
+        // file. Keep that meaning, now in the folder tree as well: "g" is "gg".
+        if let Some(key) = config.keys.get_mut("top")
+            && key.chars().count() == 1
+        {
+            *key = key.repeat(2);
+        }
         // Migrate the original defaults: Alt+s now saves both sides, including
         // when a user copied the old complete example into their Lua file.
         if config.keys.get("save_right").is_some_and(|key| {
@@ -202,6 +211,7 @@ impl Config {
             parse_color(self.colors.value(name)).with_context(|| format!("colors.{name}"))?;
         }
         let mut bindings = HashMap::new();
+        let mut sequences = HashMap::new();
         let defaults = default_keys();
         for (action, key) in &self.keys {
             if !defaults.contains_key(action) {
@@ -210,10 +220,32 @@ impl Config {
             if key.is_empty() {
                 continue;
             }
-            let binding = parse_binding(key).with_context(|| format!("keys.{action}"))?;
-            if let Some(previous) = bindings.insert(binding, action) {
+            let previous = if let Some(sequence) = parse_sequence(key) {
+                if action == "accept_edit" {
+                    bail!("keys.accept_edit must be a single key; the editor types characters");
+                }
+                sequences.insert(sequence, action)
+            } else {
+                let binding = parse_binding(key).with_context(|| format!("keys.{action}"))?;
+                bindings.insert(binding, action)
+            };
+            if let Some(previous) = previous {
                 bail!(
                     "Key {key:?} is assigned to both {previous} and {action}; set one binding to \"\" to disable it"
+                );
+            }
+        }
+        // A sequence waits for its second key, so its first key cannot be a single
+        // key where both actions work: "d" filters the tree, "dl" deletes in a file.
+        for (&(first, _), sequence) in &sequences {
+            if let Some(action) = bindings.get(&(KeyCode::Char(first), KeyModifiers::NONE))
+                && [true, false]
+                    .into_iter()
+                    .any(|tree| applies(action, tree) && applies(sequence, tree))
+            {
+                bail!(
+                    "Key {:?} of {action} also starts {sequence}; set one binding to \"\" to disable it",
+                    first.to_string()
                 );
             }
         }
@@ -226,6 +258,36 @@ impl Config {
             (!key.is_empty() && parse_binding(key).ok() == Some(binding)).then_some(action.as_str())
         })
     }
+
+    /// The action of a two-character sequence that starts with `first` and, when
+    /// given, continues with `second`, among the actions of the tree or a file.
+    pub fn sequence(&self, first: char, second: Option<char>, tree: bool) -> Option<&str> {
+        self.keys.iter().find_map(|(action, key)| {
+            let (start, end) = parse_sequence(key)?;
+            (start == first && second.is_none_or(|second| second == end) && applies(action, tree))
+                .then_some(action.as_str())
+        })
+    }
+}
+
+/// Actions that only work in the folder tree or only in an open file.
+const TREE_ACTIONS: &[&str] = &["open", "expand_all", "collapse_all", "all", "differences"];
+const FILE_ACTIONS: &[&str] = &[
+    "merge_right",
+    "merge_left",
+    "edit_left",
+    "edit_right",
+    "delete_left",
+    "delete_right",
+    "undo",
+    "next",
+    "previous",
+    "select",
+];
+
+/// Whether an action works in the folder tree (`tree`) or in an open file.
+pub fn applies(action: &str, tree: bool) -> bool {
+    !if tree { FILE_ACTIONS } else { TREE_ACTIONS }.contains(&action)
 }
 
 pub fn default_path() -> Option<PathBuf> {
@@ -350,6 +412,19 @@ fn parse_binding(value: &str) -> Result<Binding> {
         }
     }
     Ok(normalize(code, modifiers))
+}
+
+/// Two characters such as "gg" or "dl" are typed one after the other. Named keys
+/// take precedence, so "f2" remains a function key.
+fn parse_sequence(value: &str) -> Option<(char, char)> {
+    let mut characters = value.chars();
+    let sequence = (characters.next()?, characters.next()?);
+    let plain = |character: char| !character.is_control() && !character.is_whitespace();
+    (characters.next().is_none()
+        && plain(sequence.0)
+        && plain(sequence.1)
+        && parse_binding(value).is_err())
+    .then_some(sequence)
 }
 
 pub const COLOR_NAMES: [&str; 15] = [
@@ -613,6 +688,59 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn two_character_sequences_resolve_per_view_and_reject_conflicts() {
+        let config = Config::default();
+        assert_eq!(config.sequence('g', Some('g'), true), Some("top"));
+        assert_eq!(config.sequence('g', Some('g'), false), Some("top"));
+        assert_eq!(config.sequence('d', Some('h'), false), Some("delete_left"));
+        assert_eq!(config.sequence('d', Some('l'), false), Some("delete_right"));
+        assert!(config.sequence('d', None, false).is_some());
+        // In the tree, d still shows only the differences.
+        assert_eq!(config.sequence('d', None, true), None);
+        assert_eq!(
+            config.action(&KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Some("differences")
+        );
+        assert_eq!(
+            config.action(&KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE)),
+            None
+        );
+        for (source, top) in [
+            ("return { keys = { top = 'g' } }", "gg"),
+            ("return { keys = { top = 'home' } }", "home"),
+            ("return { keys = { top = 'f2' } }", "f2"),
+        ] {
+            assert_eq!(
+                Config::from_lua(source, "top.lua").unwrap().keys["top"],
+                top
+            );
+        }
+        for source in [
+            "return { keys = { undo = 'd' } }",
+            "return { keys = { differences = 'g' } }",
+            "return { keys = { delete_left = 'dl' } }",
+            "return { keys = { accept_edit = 'xx' } }",
+        ] {
+            assert!(
+                Config::from_lua(source, "conflict.lua").is_err(),
+                "{source}"
+            );
+        }
+        assert!(
+            Config::from_lua(
+                "return { keys = { differences = '', undo = 'd' } }",
+                "x.lua"
+            )
+            .is_err()
+        );
+        Config::from_lua(
+            "return { keys = { delete_left = '', delete_right = '', undo = 'd', differences = 'D' } }",
+            "free.lua",
+        )
+        .unwrap();
     }
 
     #[test]

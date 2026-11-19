@@ -41,6 +41,7 @@ return {
 
   -- Map an action to one key: characters preserve case; modifiers use +.
   -- Examples: "ctrl+q", "alt+l", "shift+tab", "f2". "" disables a binding.
+  -- Two characters such as "gg" are typed one after the other, like in vim.
   -- Duplicate bindings are rejected. Disable/rebind the old owner before reusing a key.
   -- Quit always asks for confirmation. Text fields retain normal typing behavior.
   -- Alt+s always saves both sides of an open file, including in the editor.
@@ -52,9 +53,10 @@ return {
     expand_all = "e", collapse_all = "c", all = "a", differences = "d",
     find = "/", copy_right = "alt+l", copy_left = "alt+h", -- tree: copy; diff: merge whole file
     merge_right = "L", merge_left = "H", edit_left = "i", edit_right = "I",
+    delete_left = "dh", delete_right = "dl", -- delete the line or selected lines
     undo = "u", save_left = "ctrl+s", save_right = "ctrl+alt+s", save_both = "alt+s",
     accept_edit = "alt+enter", -- Ctrl+Enter also applies if the terminal delivers it
-    next = "n", previous = "N", select = "v", top = "g", bottom = "G",
+    next = "n", previous = "N", select = "v", top = "gg", bottom = "G",
     paths = "p", include = "f", exclude = "F", whitespace = "w", focus = "tab",
   },
 }

@@ -165,7 +165,8 @@ pub struct App {
     scan_announce: bool,
     last_poll: Instant,
     exit: bool,
-    pending_g: bool,
+    /// First character of a two-character binding such as gg or dl.
+    pending_key: Option<char>,
 }
 
 impl App {
@@ -215,7 +216,7 @@ impl App {
             scan_announce: false,
             last_poll: Instant::now(),
             exit: false,
-            pending_g: false,
+            pending_key: None,
         };
         if app.paths.iter().all(Option::is_some) {
             app.set_roots()?;
@@ -708,6 +709,7 @@ impl App {
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Result<()> {
+        let pending = self.pending_key.take();
         // Alt+s always saves both sides of an open view, even with an older Lua
         // config that still binds this shortcut to save_right.
         let mut modifiers = key.modifiers;
@@ -716,7 +718,7 @@ impl App {
             && self.prompt.is_none()
             && matches!(key.code, KeyCode::Char('s' | 'S'))
             && modifiers == KeyModifiers::ALT;
-        let action = if save_both {
+        let mut action = if save_both {
             Some("save_both".to_owned())
         } else {
             self.config.action(&key).map(str::to_owned)
@@ -796,6 +798,24 @@ impl App {
         }
         if self.prompt.is_some() {
             return self.prompt_key(key);
+        }
+        // Two-character bindings such as gg or dl wait for their second key; Esc
+        // cancels a started sequence, as in vim.
+        if pending.is_some() && key.code == KeyCode::Esc {
+            return Ok(());
+        }
+        if let KeyCode::Char(character) = key.code
+            && modifiers.is_empty()
+        {
+            let tree = self.focus == Focus::Tree || self.session.is_none();
+            if let Some(sequence) =
+                pending.and_then(|first| self.config.sequence(first, Some(character), tree))
+            {
+                action = Some(sequence.to_owned());
+            } else if self.config.sequence(character, None, tree).is_some() {
+                self.pending_key = Some(character);
+                return Ok(());
+            }
         }
         match action.as_deref() {
             Some("quit") => self.confirm(Action::Quit, self.quit_message()),
@@ -1016,14 +1036,7 @@ impl App {
             (KeyCode::Char('u'), None) if key.modifiers == KeyModifiers::CONTROL => {
                 self.move_cursor(-((self.diff_height / 2).max(1) as isize))
             }
-            (KeyCode::Home, None) => self.session.as_mut().unwrap().cursor = 0,
-            (_, Some("top")) => {
-                if self.pending_g {
-                    self.session.as_mut().unwrap().cursor = 0;
-                }
-                self.pending_g = !self.pending_g;
-                return Ok(());
-            }
+            (KeyCode::Home, None) | (_, Some("top")) => self.session.as_mut().unwrap().cursor = 0,
             (KeyCode::End, None) | (_, Some("bottom")) => {
                 let s = self.session.as_mut().unwrap();
                 s.cursor = s.diff.rows.len().saturating_sub(1);
@@ -1060,6 +1073,13 @@ impl App {
             (_, Some("edit_left" | "edit_right")) => {
                 self.edit(usize::from(action == Some("edit_right")))?
             }
+            (_, Some("delete_left" | "delete_right")) => {
+                self.session.as_mut().unwrap().delete(
+                    usize::from(action == Some("delete_right")),
+                    self.config.ignore_whitespace,
+                )?;
+                self.message = "Delete staged. Save to write to disk; u to undo.".into();
+            }
             (_, Some("undo")) => {
                 if self.session.as_mut().unwrap().undo() {
                     self.session
@@ -1079,7 +1099,6 @@ impl App {
             }
             _ => {}
         }
-        self.pending_g = false;
         Ok(())
     }
 
@@ -1397,6 +1416,59 @@ mod tests {
         app.key(key(KeyCode::Char('4'))).unwrap();
         assert_eq!(app.session.as_ref().unwrap().cursor, 0);
         assert_eq!(app.session.as_ref().unwrap().horizontal, 0);
+    }
+
+    #[test]
+    fn gg_goes_to_the_top_in_both_views_and_dh_dl_delete_lines() {
+        let mut app = app_with_text("a\nb\nc\n");
+        app.session.as_mut().unwrap().cursor = 2;
+        app.key(key(KeyCode::Char('g'))).unwrap();
+        assert_eq!(
+            app.session.as_ref().unwrap().cursor,
+            2,
+            "g waits for a second g"
+        );
+        app.key(key(KeyCode::Char('g'))).unwrap();
+        assert_eq!(app.session.as_ref().unwrap().cursor, 0);
+        app.key(key(KeyCode::Char('d'))).unwrap();
+        app.key(key(KeyCode::Char('h'))).unwrap();
+        assert_eq!(app.session.as_ref().unwrap().docs[0].lines, ["b", "c"]);
+        assert_eq!(app.session.as_ref().unwrap().horizontal, 0);
+        app.key(key(KeyCode::Char('d'))).unwrap();
+        app.key(key(KeyCode::Char('l'))).unwrap();
+        assert_eq!(app.session.as_ref().unwrap().docs[1].lines, ["a", "c"]);
+        app.key(key(KeyCode::Char('u'))).unwrap();
+        assert_eq!(app.session.as_ref().unwrap().docs[1].lines, ["a", "b", "c"]);
+        // Esc cancels a started sequence instead of closing the file.
+        app.key(key(KeyCode::Char('d'))).unwrap();
+        app.key(key(KeyCode::Esc)).unwrap();
+        assert!(app.session.is_some() && app.confirmation.is_none());
+        app.key(key(KeyCode::Char('l'))).unwrap();
+        assert_eq!(app.session.as_ref().unwrap().horizontal, 4);
+        assert_eq!(app.session.as_ref().unwrap().docs[1].lines, ["a", "b", "c"]);
+
+        app.focus = Focus::Tree;
+        app.nodes = ["a.txt", "b.txt", "c.txt"]
+            .map(|name| Node {
+                path: name.into(),
+                is_dir: false,
+                present: [true; 2],
+                sizes: [None; 2],
+                status: crate::model::Status::Same,
+                error: None,
+            })
+            .into();
+        app.selected = 2;
+        app.key(key(KeyCode::Char('g'))).unwrap();
+        assert_eq!(
+            app.selected, 2,
+            "g waits for a second g in the tree as well"
+        );
+        app.key(key(KeyCode::Char('g'))).unwrap();
+        assert_eq!(app.selected, 0);
+        // In the tree, d does not start a sequence: it still shows only differences.
+        app.key(key(KeyCode::Char('d'))).unwrap();
+        assert!(app.config.differences_only);
     }
 
     #[test]
