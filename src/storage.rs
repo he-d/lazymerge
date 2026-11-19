@@ -8,6 +8,8 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::{ErrorKind, Write},
     path::{Component, Path, PathBuf},
+    thread,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Debug)]
@@ -255,9 +257,32 @@ impl Roots {
             relative.display()
         );
         if expected.is_some() {
-            temp.persist(&destination)
-                .map_err(|error| error.error)
-                .with_context(|| format!("Cannot save {}", destination.display()))?;
+            // Windows denies replacing a file while another handle reads it, for example
+            // a background folder scan or a virus scanner. Retry briefly and re-check the
+            // destination before each attempt, so an external change is never overwritten.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match temp.persist(&destination) {
+                    Ok(_) => break,
+                    Err(error)
+                        if cfg!(windows)
+                            && error.error.kind() == ErrorKind::PermissionDenied
+                            && Instant::now() < deadline =>
+                    {
+                        temp = error.file;
+                        thread::sleep(Duration::from_millis(20));
+                        ensure!(
+                            self.read(side, relative)?.as_deref().map(Fingerprint::of) == expected,
+                            "Destination changed while saving: {}. Reload and try again",
+                            relative.display()
+                        );
+                    }
+                    Err(error) => {
+                        return Err(error.error)
+                            .with_context(|| format!("Cannot save {}", destination.display()));
+                    }
+                }
+            }
         } else {
             // An absent destination must remain absent right up to creation.
             temp.persist_noclobber(&destination)
@@ -653,6 +678,24 @@ mod tests {
             b"\xef\xbb\xbfnew\r\n"
         );
         assert!(!session.docs[1].dirty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn save_waits_for_a_reader_that_briefly_holds_the_destination() {
+        let (_temp, roots) = folders();
+        fs::write(roots.paths[0].join("file"), b"left\n").unwrap();
+        fs::write(roots.paths[1].join("file"), b"right\n").unwrap();
+        let mut session = roots.open(Path::new("file"), false).unwrap();
+        session.docs[1].lines[0] = "new".to_string();
+        let reader = fs::File::open(roots.paths[1].join("file")).unwrap();
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            drop(reader);
+        });
+        roots.save(&mut session, 1, false).unwrap();
+        release.join().unwrap();
+        assert_eq!(fs::read(roots.paths[1].join("file")).unwrap(), b"new\n");
     }
 
     #[test]

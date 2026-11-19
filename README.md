@@ -7,7 +7,7 @@
   A Rust terminal app and a self-contained HTML app. Both work locally, without a server.
 </p>
 
-Current version: **0.1.2** for both the terminal and browser apps.
+Current version: **0.1.3** for both the terminal and browser apps.
 
 ## Terminal version
 
@@ -37,7 +37,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/he-
 
 The installers download a prebuilt binary from [GitHub Releases](https://github.com/he-d/lazymerge/releases), verify its SHA-256 checksum, and install for your user account. No Rust toolchain, Lua installation or administrator access is needed. Rerun the same command to update.
 
-Linux/macOS installs to `~/.local/bin` by default; the installer prints any `PATH` setup needed. Windows installs to `%LOCALAPPDATA%\LazyMerge\bin` and updates your user `PATH`; open a new terminal afterward. Set `LAZYMERGE_INSTALL_DIR` to use another directory or `LAZYMERGE_VERSION=0.1.2` to select a release.
+Linux/macOS installs to `~/.local/bin` by default; the installer prints any `PATH` setup needed. Windows installs to `%LOCALAPPDATA%\LazyMerge\bin` and updates your user `PATH`; open a new terminal afterward. Set `LAZYMERGE_INSTALL_DIR` to use another directory or `LAZYMERGE_VERSION=0.1.3` to select a release.
 
 The download commands require the installer files on `main` and published release binaries; see [Publishing a release](#publishing-a-release). To install directly from a local checkout, install a Rust toolchain and a C compiler, then run:
 
@@ -172,7 +172,7 @@ Run `python3 tests/test_install.py` for the Unix installer's offline integration
 
 ### Publishing a release
 
-The [release workflow](.github/workflows/release.yml) tests and builds native x64/ARM64 binaries for Linux, macOS and Windows. It also runs the terminal smoke tests on Linux and macOS. Linux builds use musl. Pushing a version tag matching both apps, such as `v0.1.2`, publishes the archives, `SHA256SUMS`, browser HTML, installers and example config to GitHub Releases. Installer updates check these release checksums before replacing an existing executable.
+The [release workflow](.github/workflows/release.yml) tests and builds native x64/ARM64 binaries for Linux, macOS and Windows. It also runs the terminal smoke tests on Linux and macOS. Linux builds use musl. Pushing a version tag matching both apps, such as `v0.1.3`, publishes the archives, `SHA256SUMS`, browser HTML, installers and example config to GitHub Releases. Installer updates check these release checksums before replacing an existing executable.
 
 Publish the source and installer scripts on `main` before pushing the release tag. Running the workflow manually builds and checks the packages without publishing a release. The public one-line commands become usable after those files and release assets are published.
 
