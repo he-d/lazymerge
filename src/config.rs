@@ -76,6 +76,7 @@ pub fn default_keys() -> BTreeMap<String, String> {
         ("merge_left", "H"),
         ("edit_left", "i"),
         ("edit_right", "I"),
+        ("delete_both", "dd"),
         ("delete_left", "dh"),
         ("delete_right", "dl"),
         ("undo", "u"),
@@ -88,6 +89,7 @@ pub fn default_keys() -> BTreeMap<String, String> {
         ("select", "v"),
         ("top", "gg"),
         ("bottom", "G"),
+        ("center", "zz"),
         ("paths", "p"),
         ("include", "f"),
         ("exclude", "F"),
@@ -277,6 +279,7 @@ const FILE_ACTIONS: &[&str] = &[
     "merge_left",
     "edit_left",
     "edit_right",
+    "delete_both",
     "delete_left",
     "delete_right",
     "undo",
@@ -695,11 +698,16 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.sequence('g', Some('g'), true), Some("top"));
         assert_eq!(config.sequence('g', Some('g'), false), Some("top"));
+        assert_eq!(config.sequence('d', Some('d'), false), Some("delete_both"));
         assert_eq!(config.sequence('d', Some('h'), false), Some("delete_left"));
         assert_eq!(config.sequence('d', Some('l'), false), Some("delete_right"));
         assert!(config.sequence('d', None, false).is_some());
         // In the tree, d still shows only the differences.
         assert_eq!(config.sequence('d', None, true), None);
+        assert_eq!(config.sequence('d', Some('d'), true), None);
+        // zz centers the cursor row in a file and the selected row in the tree.
+        assert_eq!(config.sequence('z', Some('z'), false), Some("center"));
+        assert_eq!(config.sequence('z', Some('z'), true), Some("center"));
         assert_eq!(
             config.action(&KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
             Some("differences")
@@ -722,6 +730,8 @@ mod tests {
             "return { keys = { undo = 'd' } }",
             "return { keys = { differences = 'g' } }",
             "return { keys = { delete_left = 'dl' } }",
+            "return { keys = { delete_both = 'dh' } }",
+            "return { keys = { undo = 'z' } }",
             "return { keys = { accept_edit = 'xx' } }",
         ] {
             assert!(
@@ -737,7 +747,7 @@ mod tests {
             .is_err()
         );
         Config::from_lua(
-            "return { keys = { delete_left = '', delete_right = '', undo = 'd', differences = 'D' } }",
+            "return { keys = { delete_both = '', delete_left = '', delete_right = '', undo = 'd', differences = 'D' } }",
             "free.lua",
         )
         .unwrap();

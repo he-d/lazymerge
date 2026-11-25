@@ -178,9 +178,10 @@ impl App {
         for (side, path) in paths.iter().enumerate() {
             if let Some(path) = path
                 && !path.is_dir()
+                && !path.is_file()
             {
                 bail!(
-                    "{} folder is not an existing directory: {}",
+                    "{} path is not an existing folder or file: {}",
                     if side == 0 { "Left" } else { "Right" },
                     path.display()
                 );
@@ -345,10 +346,22 @@ impl App {
     fn set_roots(&mut self) -> Result<()> {
         let left = self.paths[0].as_ref().unwrap();
         let right = self.paths[1].as_ref().unwrap();
-        self.roots = Some(Roots::new(left, right)?);
-        self.session = None;
+        let roots = Roots::new(left, right)?;
+        // Two files open directly; there is no folder tree to choose from.
+        let session = roots
+            .file_name()
+            .map(|name| roots.open(&name, self.config.ignore_whitespace))
+            .transpose()?;
+        self.roots = Some(roots);
+        self.focus = if session.is_some() {
+            Focus::Diff
+        } else {
+            Focus::Tree
+        };
+        self.session = session;
+        self.diff_scroll = 0;
+        self.diff_query.clear();
         self.file_change_notice = None;
-        self.focus = Focus::Tree;
         self.nodes.clear();
         self.expanded.clear();
         self.tree_query.clear();
@@ -387,8 +400,25 @@ impl App {
         self.scanning = true;
         self.scan_announce = announce;
         if announce {
-            self.message = "Comparing folders…".into();
+            self.message = if self.compares_files() {
+                "Comparing files…"
+            } else {
+                "Comparing folders…"
+            }
+            .into();
         }
+    }
+
+    /// Whether two files are compared rather than two folders.
+    pub fn compares_files(&self) -> bool {
+        self.roots.as_ref().is_some_and(|roots| roots.files)
+    }
+
+    /// Path completion also offers files once the other side is a file.
+    pub fn path_completes_files(&self, side: usize) -> bool {
+        self.paths[1 - side]
+            .as_ref()
+            .is_some_and(|path| path.is_file())
     }
 
     pub fn receive_scan(&mut self) -> bool {
@@ -424,10 +454,17 @@ impl App {
                             self.selected = index;
                         }
                         self.clamp_selection();
-                        let summary = format!(
-                            "Compared {} files",
-                            self.nodes.iter().filter(|n| !n.is_dir).count()
-                        );
+                        let summary = if self.compares_files() {
+                            format!(
+                                "Compared 2 files · {}",
+                                self.nodes.first().map_or("error", |n| n.status.label())
+                            )
+                        } else {
+                            format!(
+                                "Compared {} files",
+                                self.nodes.iter().filter(|n| !n.is_dir).count()
+                            )
+                        };
                         if self.scan_announce || self.scan_notice.is_some() {
                             self.message = if self.rescan_requested {
                                 summary
@@ -652,8 +689,8 @@ impl App {
                 let result = match prompt.kind {
                     PromptKind::Path(side) => (|| {
                         let path = expand_path(&prompt.input.value)?;
-                        if !path.is_dir() {
-                            bail!("Enter an existing directory");
+                        if !path.is_dir() && !path.is_file() {
+                            bail!("Enter an existing folder or file");
                         }
                         self.paths[side] = Some(path);
                         if side == 0 && (self.paths[1].is_none() || self.roots.is_some()) {
@@ -694,7 +731,8 @@ impl App {
                 return Ok(());
             }
             KeyCode::Tab | KeyCode::BackTab if matches!(prompt.kind, PromptKind::Path(_)) => {
-                if let Err(error) = prompt.input.complete(key.code == KeyCode::BackTab) {
+                let files = matches!(prompt.kind, PromptKind::Path(side) if self.path_completes_files(side));
+                if let Err(error) = prompt.input.complete(key.code == KeyCode::BackTab, files) {
                     prompt.error = error.to_string();
                 }
             }
@@ -823,9 +861,10 @@ impl App {
                 self.help = true;
                 self.help_scroll = 0;
             }
-            Some("paths") => self.guarded(Action::Paths, "Choose new folders?")?,
+            Some("paths") => self.guarded(Action::Paths, "Choose other folders or files?")?,
             Some("focus") => {
-                if self.session.is_some() {
+                // Two compared files have no folder tree to switch to.
+                if self.session.is_some() && !self.compares_files() {
                     self.focus = if self.focus == Focus::Tree {
                         Focus::Diff
                     } else {
@@ -921,6 +960,11 @@ impl App {
             (KeyCode::Home, None) | (_, Some("top")) => self.selected = 0,
             (KeyCode::End, None) | (_, Some("bottom")) => {
                 self.selected = self.visible().len().saturating_sub(1)
+            }
+            (_, Some("center")) => {
+                self.tree_scroll = self
+                    .selected
+                    .saturating_sub(self.tree_height.saturating_sub(1) / 2)
             }
             (_, Some("reload")) => self.guarded(Action::Rescan, "Reload from disk?")?,
             (_, Some("all")) => {
@@ -1030,17 +1074,21 @@ impl App {
             (KeyCode::Up, None) | (_, Some("scroll_up")) => self.move_cursor(-1),
             (KeyCode::PageDown, None) => self.move_cursor(self.diff_height.max(1) as isize),
             (KeyCode::PageUp, None) => self.move_cursor(-(self.diff_height.max(1) as isize)),
+            // Half a page, then the cursor row in the middle, like vim's Ctrl+d zz.
             (KeyCode::Char('d'), None) if key.modifiers == KeyModifiers::CONTROL => {
-                self.move_cursor((self.diff_height / 2).max(1) as isize)
+                self.move_cursor((self.diff_height / 2).max(1) as isize);
+                self.center_diff();
             }
             (KeyCode::Char('u'), None) if key.modifiers == KeyModifiers::CONTROL => {
-                self.move_cursor(-((self.diff_height / 2).max(1) as isize))
+                self.move_cursor(-((self.diff_height / 2).max(1) as isize));
+                self.center_diff();
             }
             (KeyCode::Home, None) | (_, Some("top")) => self.session.as_mut().unwrap().cursor = 0,
             (KeyCode::End, None) | (_, Some("bottom")) => {
                 let s = self.session.as_mut().unwrap();
                 s.cursor = s.diff.rows.len().saturating_sub(1);
             }
+            (_, Some("center")) => self.center_diff(),
             (KeyCode::Left, None) | (_, Some("scroll_left")) => {
                 let s = self.session.as_mut().unwrap();
                 s.horizontal = s.horizontal.saturating_sub(4);
@@ -1073,11 +1121,16 @@ impl App {
             (_, Some("edit_left" | "edit_right")) => {
                 self.edit(usize::from(action == Some("edit_right")))?
             }
-            (_, Some("delete_left" | "delete_right")) => {
-                self.session.as_mut().unwrap().delete(
-                    usize::from(action == Some("delete_right")),
-                    self.config.ignore_whitespace,
-                )?;
+            (_, Some("delete_both" | "delete_left" | "delete_right")) => {
+                let sides: &[usize] = match action {
+                    Some("delete_left") => &[0],
+                    Some("delete_right") => &[1],
+                    _ => &[0, 1],
+                };
+                self.session
+                    .as_mut()
+                    .unwrap()
+                    .delete(sides, self.config.ignore_whitespace)?;
                 self.message = "Delete staged. Save to write to disk; u to undo.".into();
             }
             (_, Some("undo")) => {
@@ -1093,6 +1146,12 @@ impl App {
             (KeyCode::Esc, None) => {
                 if self.session.as_ref().unwrap().anchor.is_some() {
                     self.session.as_mut().unwrap().anchor = None;
+                } else if self.compares_files() {
+                    // Two compared files have no folder tree to return to.
+                    self.message = format!(
+                        "Comparing two files · {} quits · {} chooses other paths",
+                        self.config.keys["quit"], self.config.keys["paths"]
+                    );
                 } else {
                     self.guarded(Action::Close, "Close this file?")?;
                 }
@@ -1108,6 +1167,16 @@ impl App {
                 .cursor
                 .saturating_add_signed(delta)
                 .min(s.diff.rows.len().saturating_sub(1));
+        }
+    }
+
+    /// Scroll the file so that the cursor row is in the middle, like vim's `zz`.
+    /// Drawing keeps the view within the file, so rows near its start or end stay put.
+    fn center_diff(&mut self) {
+        if let Some(s) = &self.session {
+            self.diff_scroll = s
+                .cursor
+                .saturating_sub(self.diff_height.saturating_sub(1) / 2);
         }
     }
 
@@ -1469,6 +1538,172 @@ mod tests {
         // In the tree, d does not start a sequence: it still shows only differences.
         app.key(key(KeyCode::Char('d'))).unwrap();
         assert!(app.config.differences_only);
+    }
+
+    #[test]
+    fn dd_deletes_the_line_or_selection_on_both_sides_and_u_restores_both() {
+        let mut app = app_with_text("a\nb\nc\nd\n");
+        app.session.as_mut().unwrap().cursor = 1;
+        app.key(key(KeyCode::Char('d'))).unwrap();
+        assert_eq!(
+            app.session.as_ref().unwrap().docs[0].lines.len(),
+            4,
+            "d waits for a second key"
+        );
+        app.key(key(KeyCode::Char('d'))).unwrap();
+        let session = app.session.as_ref().unwrap();
+        assert_eq!(session.docs[0].lines, ["a", "c", "d"]);
+        assert_eq!(session.docs[1].lines, ["a", "c", "d"]);
+        assert_eq!(session.cursor, 1);
+        assert!(app.message.contains("Delete staged"));
+        // With marked lines, dd deletes the marked area.
+        app.key(key(KeyCode::Char('v'))).unwrap();
+        app.key(key(KeyCode::Char('j'))).unwrap();
+        app.key(key(KeyCode::Char('d'))).unwrap();
+        app.key(key(KeyCode::Char('d'))).unwrap();
+        let session = app.session.as_ref().unwrap();
+        assert_eq!(session.docs[0].lines, ["a"]);
+        assert_eq!(session.docs[1].lines, ["a"]);
+        assert!(session.anchor.is_none());
+        app.key(key(KeyCode::Char('u'))).unwrap();
+        assert_eq!(app.session.as_ref().unwrap().docs[1].lines, ["a", "c", "d"]);
+        app.key(key(KeyCode::Char('u'))).unwrap();
+        assert!(!app.session.as_ref().unwrap().dirty());
+    }
+
+    #[test]
+    fn zz_and_half_page_motions_center_the_cursor_row() {
+        let text = (0..100).map(|i| format!("line {i}\n")).collect::<String>();
+        let mut app = app_with_text(&text);
+        app.diff_height = 11;
+        app.session.as_mut().unwrap().cursor = 50;
+        app.key(key(KeyCode::Char('z'))).unwrap();
+        assert_eq!(app.diff_scroll, 0, "z waits for a second z");
+        app.key(key(KeyCode::Char('z'))).unwrap();
+        assert_eq!(app.diff_scroll, 45);
+        app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert_eq!(app.session.as_ref().unwrap().cursor, 55);
+        assert_eq!(app.diff_scroll, 50);
+        app.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+            .unwrap();
+        app.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert_eq!(app.session.as_ref().unwrap().cursor, 45);
+        assert_eq!(app.diff_scroll, 40);
+        // Near the start of the file there is nothing above to scroll past.
+        app.session.as_mut().unwrap().cursor = 2;
+        app.key(key(KeyCode::Char('z'))).unwrap();
+        app.key(key(KeyCode::Char('z'))).unwrap();
+        assert_eq!(app.diff_scroll, 0);
+
+        app.focus = Focus::Tree;
+        app.tree_height = 5;
+        app.nodes = (0..20)
+            .map(|i| Node {
+                path: format!("{i:02}.txt").into(),
+                is_dir: false,
+                present: [true; 2],
+                sizes: [None; 2],
+                status: crate::model::Status::Same,
+                error: None,
+            })
+            .collect();
+        app.selected = 10;
+        app.key(key(KeyCode::Char('z'))).unwrap();
+        app.key(key(KeyCode::Char('z'))).unwrap();
+        assert_eq!(app.tree_scroll, 8);
+    }
+
+    fn file_pair(left: &[u8], right: &[u8]) -> (tempfile::TempDir, [PathBuf; 2]) {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = [
+            directory.path().join("left file.txt"),
+            directory.path().join("right file.txt"),
+        ];
+        fs::write(&paths[0], left).unwrap();
+        fs::write(&paths[1], right).unwrap();
+        (directory, paths)
+    }
+
+    #[test]
+    fn two_files_open_directly_and_save_to_the_chosen_paths() {
+        let (_directory, [left, right]) = file_pair(b"same\nleft\n", b"same\r\nright\r\n");
+        let mut app = App::new(Config::default(), Some(left.clone()), Some(right.clone())).unwrap();
+        assert!(app.compares_files());
+        assert_eq!(app.focus, Focus::Diff);
+        let session = app.session.as_ref().unwrap();
+        assert_eq!(session.docs[0].lines, ["same", "left"]);
+        assert_eq!(session.docs[1].lines, ["same", "right"]);
+        assert_eq!(session.cursor, 1);
+        // Neither Esc nor Tab leaves the file view: there is no folder tree.
+        app.key(key(KeyCode::Esc)).unwrap();
+        app.key(key(KeyCode::Tab)).unwrap();
+        assert!(app.session.is_some() && app.confirmation.is_none());
+        assert_eq!(app.focus, Focus::Diff);
+        assert!(app.message.contains("Comparing two files"));
+        app.key(key(KeyCode::Char('L'))).unwrap();
+        app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT))
+            .unwrap();
+        assert_eq!(fs::read(&right).unwrap(), b"same\r\nleft\r\n");
+        assert_eq!(fs::read(&left).unwrap(), b"same\nleft\n");
+        assert!(!app.session.as_ref().unwrap().dirty());
+        finish_scan(&mut app);
+        assert_eq!(app.nodes.len(), 1);
+        assert!(app.message.contains("Saved Right"), "{}", app.message);
+        assert!(app.message.contains("Compared 2 files"), "{}", app.message);
+        // External changes reload a clean view, as for a file in a folder.
+        fs::write(&left, "changed elsewhere\n").unwrap();
+        assert!(app.check_disk_changes());
+        assert_eq!(
+            app.session.as_ref().unwrap().docs[0].lines,
+            ["changed elsewhere"]
+        );
+    }
+
+    #[test]
+    fn a_file_and_a_folder_are_rejected_and_prompts_accept_files() {
+        let (directory, [left, right]) = file_pair(b"left\n", b"right\n");
+        let error = App::new(
+            Config::default(),
+            Some(left.clone()),
+            Some(directory.path().into()),
+        )
+        .err()
+        .unwrap();
+        assert!(format!("{error:#}").contains("two folders or two files"));
+        let missing = directory.path().join("missing.txt");
+        assert!(App::new(Config::default(), Some(missing), Some(right.clone())).is_err());
+        // With only the left file given, the right prompt completes and accepts a file.
+        let mut app = App::new(Config::default(), Some(left), None).unwrap();
+        assert!(matches!(
+            app.prompt.as_ref().unwrap().kind,
+            PromptKind::Path(1)
+        ));
+        assert!(app.path_completes_files(1));
+        app.prompt.as_mut().unwrap().input =
+            Input::new(directory.path().join("right f").display().to_string());
+        app.key(key(KeyCode::Tab)).unwrap();
+        assert_eq!(
+            app.prompt.as_ref().unwrap().input.value,
+            right.display().to_string()
+        );
+        app.key(key(KeyCode::Enter)).unwrap();
+        assert!(app.prompt.is_none());
+        assert!(app.compares_files());
+        assert_eq!(app.session.as_ref().unwrap().docs[1].lines, ["right"]);
+        // Choosing a folder for one side of two files keeps the prompt open.
+        app.key(key(KeyCode::Char('p'))).unwrap();
+        app.key(key(KeyCode::Enter)).unwrap();
+        app.prompt.as_mut().unwrap().input = Input::new(directory.path().to_string_lossy());
+        app.key(key(KeyCode::Enter)).unwrap();
+        assert!(
+            app.prompt
+                .as_ref()
+                .unwrap()
+                .error
+                .contains("two folders or two files")
+        );
     }
 
     #[test]

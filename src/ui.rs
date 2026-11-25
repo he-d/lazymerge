@@ -72,7 +72,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     header(frame, app, parts[0], logo_height > 2);
     toolbar(frame, app, parts[1]);
     if app.roots.is_some() {
-        if app.session.is_some() {
+        if app.session.is_some() && app.compares_files() {
+            // Two compared files: no folder tree, the file view fills the body.
+            diff(frame, app, parts[2]);
+        } else if app.session.is_some() {
             let body = Layout::vertical([
                 Constraint::Percentage(app.config.tree_percent),
                 Constraint::Min(5),
@@ -84,7 +87,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             tree(frame, app, parts[2]);
         }
     } else {
-        frame.render_widget(Paragraph::new("Choose two folders to compare\n\nTab completes directory paths. Paths may contain spaces.\nFiles are written only when you save or confirm a copy.")
+        frame.render_widget(Paragraph::new("Choose two folders or two files to compare\n\nTab completes paths. Paths may contain spaces.\nFiles are written only when you save or confirm a copy.")
             .alignment(Alignment::Center).style(base.fg(app.config.colors.color("muted"))), centered(parts[2], 74, 7));
     }
     footer(frame, app, parts[3]);
@@ -179,10 +182,30 @@ fn toolbar(frame: &mut Frame, app: &App, area: Rect) {
         "All files"
     };
     let ws = if app.config.ignore_whitespace {
-        "  [w] ignore whitespace ✓"
+        "[w] ignore whitespace ✓"
     } else {
-        "  [w] ignore whitespace"
+        "[w] ignore whitespace"
     };
+    if app.compares_files() {
+        // The folder filters and the tree's file modes do not apply to two files.
+        let first = Line::from(vec![
+            Span::styled(
+                " [Two files] ",
+                Style::default()
+                    .fg(t.color("accent"))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(
+                "{} reload  {} paths  {} help",
+                key("reload"),
+                key("paths"),
+                key("help")
+            )),
+        ]);
+        let second = Line::styled(format!(" {ws}"), Style::default().fg(t.color("muted")));
+        frame.render_widget(Paragraph::new(vec![first, second]), area);
+        return;
+    }
     let first = Line::from(vec![
         Span::styled(
             format!(" [{mode}] "),
@@ -201,7 +224,7 @@ fn toolbar(frame: &mut Frame, app: &App, area: Rect) {
     ]);
     let second = Line::from(vec![Span::styled(
         format!(
-            " [{}] Filter: {}  [{}] Exclude: {}{ws}",
+            " [{}] Filter: {}  [{}] Exclude: {}  {ws}",
             key("include"),
             if app.config.include.is_empty() {
                 "*"
@@ -407,7 +430,10 @@ fn diff(frame: &mut Frame, app: &mut App, area: Rect) {
     let s = app.session.as_ref().unwrap();
     let title = format!(
         " {} · {} sections{} ",
-        s.path.display(),
+        app.roots.as_ref().map_or_else(
+            || s.path.display().to_string(),
+            |roots| roots.title(&s.path)
+        ),
         s.diff.hunks.len(),
         if app.focus == Focus::Diff {
             " [active]"
@@ -430,8 +456,13 @@ fn diff(frame: &mut Frame, app: &mut App, area: Rect) {
     .split(inner);
     for side in 0..2 {
         let doc = &s.docs[side];
+        // Without the folder tree, its header with the chosen paths is not shown.
+        let path = match &app.roots {
+            Some(roots) if roots.files => format!(" · {}", roots.paths[side].display()),
+            _ => String::new(),
+        };
         let encoding = format!(
-            " {} · {} {}{}{}{}{}",
+            " {} · {} {}{}{}{}{}{path}",
             app.label(side),
             doc.encoding,
             match doc.eol.as_str() {
@@ -479,7 +510,11 @@ fn diff(frame: &mut Frame, app: &mut App, area: Rect) {
         .diff_scroll
         .min(s.diff.rows.len().saturating_sub(height));
     if s.docs.iter().any(|d| d.binary) {
-        let message = "Binary file — compare is unavailable.\nPress Tab to focus the tree, then Alt+l / Alt+h to copy the whole file (asks first).";
+        let message = if app.compares_files() {
+            "Binary file — compare is unavailable."
+        } else {
+            "Binary file — compare is unavailable.\nPress Tab to focus the tree, then Alt+l / Alt+h to copy the whole file (asks first)."
+        };
         frame.render_widget(
             Paragraph::new(message)
                 .alignment(Alignment::Center)
@@ -665,13 +700,19 @@ fn diff(frame: &mut Frame, app: &mut App, area: Rect) {
             .unwrap_or("")
     };
     let controls = format!(
-        " {}/{} section ←/→  {}/{} all  {} undo  {} save both  Esc close",
+        " {}/{} section ←/→  {}/{} all  {} delete  {} undo  {} save both{}",
         key("merge_left"),
         key("merge_right"),
         key("copy_left"),
         key("copy_right"),
+        key("delete_both"),
         key("undo"),
-        key("save_both")
+        key("save_both"),
+        if app.compares_files() {
+            ""
+        } else {
+            "  Esc close"
+        }
     );
     frame.render_widget(
         Paragraph::new(controls).style(Style::default().fg(app.config.colors.color("muted"))),
@@ -905,7 +946,12 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         )
     } else {
         format!(
-            "j/k move · n/N section · v select · i/I edit · / find · Tab tree · {} quit",
+            "j/k move · n/N section · v select · i/I edit · / find{} · {} quit",
+            if app.compares_files() {
+                ""
+            } else {
+                " · Tab tree"
+            },
             keys["quit"]
         )
     };
@@ -968,8 +1014,8 @@ fn popup(frame: &mut Frame, app: &App, area: Rect, title: &str) -> Rect {
 fn prompt(frame: &mut Frame, app: &App) {
     let p = app.prompt.as_ref().unwrap();
     let (title, path) = match p.kind {
-        PromptKind::Path(0) => ("Left folder path · step 1 of 2", true),
-        PromptKind::Path(_) => ("Right folder path · step 2 of 2", true),
+        PromptKind::Path(0) => ("Left folder or file · step 1 of 2", true),
+        PromptKind::Path(_) => ("Right folder or file · step 2 of 2", true),
         PromptKind::FindTree => ("Find file name", false),
         PromptKind::FindDiff => (
             "Find text · Enter next · Shift+Enter previous · Esc return",
@@ -1006,7 +1052,8 @@ fn prompt(frame: &mut Frame, app: &App) {
     if path && inner.height > 2 {
         let mut preview = p.input.clone();
         if preview.completions.is_empty() {
-            let _ = preview.complete(false);
+            let files = matches!(p.kind, PromptKind::Path(side) if app.path_completes_files(side));
+            let _ = preview.complete(false, files);
         }
         let candidates = preview
             .completions
@@ -1198,9 +1245,13 @@ fn help(frame: &mut Frame, app: &App) {
         Line::raw(
             "Folders: Enter open · arrows navigate · gg/G top/bottom · PageUp/PageDown scroll",
         ),
-        Line::raw("Diff: arrows navigate/scroll · gg/G top/bottom · Ctrl+d/u half page"),
+        Line::raw("Diff: arrows navigate/scroll · gg/G top/bottom · zz cursor row to the middle"),
+        Line::raw("Diff: Ctrl+d/u half a page down/up, then the cursor row in the middle"),
         Line::raw("Diff: L/H merge section or selected lines · Alt+l/h merge all"),
-        Line::raw("Diff: dh/dl delete the left/right line or selected lines · u undo"),
+        Line::raw(
+            "Diff: dd delete the line or selected lines on both sides · dh/dl left/right · u undo",
+        ),
+        Line::raw("Two files (lazymerge LEFT_FILE RIGHT_FILE) open without the folder tree"),
         Line::raw("Editor: Alt+Enter apply · Alt+s save both · Esc cancel · Enter new line"),
         Line::raw("Prompts: Tab / Shift+Tab complete paths · Ctrl+u clear · Ctrl+w word"),
         Line::raw("Confirmations: y accept · n/Esc cancel · Tab choose · Enter accept"),
@@ -1382,6 +1433,7 @@ mod tests {
         app.prompt = None;
         app.roots = Some(Roots {
             paths: [PathBuf::from("/left"), PathBuf::from("/right")],
+            files: false,
         });
         app.session = Some(Session::new(
             PathBuf::from("demo.xml"),
@@ -1412,6 +1464,7 @@ mod tests {
         app.prompt = None;
         app.roots = Some(Roots {
             paths: [PathBuf::from("/left"), PathBuf::from("/right")],
+            files: false,
         });
         app.session = Some(Session::new(
             PathBuf::from("gap.txt"),
@@ -1446,6 +1499,103 @@ mod tests {
             .map(|x| buffer[(x, row)].symbol())
             .collect::<String>();
         assert!(line.contains("deleted"), "{line}");
+    }
+
+    fn screen(app: &mut App, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn two_files_fill_the_body_without_a_folder_tree() {
+        let mut app = App::new(Config::default(), None, None).unwrap();
+        app.prompt = None;
+        app.roots = Some(Roots {
+            paths: [
+                PathBuf::from("/left/old name.rs"),
+                PathBuf::from("/right/new name.rs"),
+            ],
+            files: true,
+        });
+        app.session = Some(Session::new(
+            PathBuf::from("old name.rs"),
+            [
+                Document::from_bytes(Some(b"fn main() {}\nleft\n".to_vec())),
+                Document::from_bytes(Some(b"fn main() {}\nright\n".to_vec())),
+            ],
+            false,
+        ));
+        app.focus = Focus::Diff;
+        let text = screen(&mut app, 120, 32);
+        assert!(
+            text.contains("old name.rs ↔ new name.rs · 1 sections"),
+            "{text}"
+        );
+        assert!(text.contains("/left/old name.rs") && text.contains("/right/new name.rs"));
+        assert!(text.contains("[Two files]"));
+        assert!(!text.contains("Folders"), "{text}");
+        assert!(!text.contains("Filter"), "{text}");
+        assert!(
+            !text.contains("Tab tree") && !text.contains("Esc close"),
+            "{text}"
+        );
+        assert!(text.contains("dd delete"), "{text}");
+        assert!(app.mouse_state.tree_pane.area() == 0);
+    }
+
+    #[test]
+    fn zz_keeps_the_cursor_row_in_the_middle_after_drawing() {
+        let mut app = App::new(Config::default(), None, None).unwrap();
+        app.prompt = None;
+        let text = (0..200).map(|i| format!("row {i}\n")).collect::<String>();
+        app.session = Some(Session::new(
+            PathBuf::from("rows.txt"),
+            [
+                Document::from_bytes(Some(text.as_bytes().to_vec())),
+                Document::from_bytes(Some(text.as_bytes().to_vec())),
+            ],
+            false,
+        ));
+        app.roots = Some(Roots {
+            paths: [PathBuf::from("/left"), PathBuf::from("/right")],
+            files: false,
+        });
+        app.focus = Focus::Diff;
+        screen(&mut app, 100, 40);
+        app.session.as_mut().unwrap().cursor = 100;
+        screen(&mut app, 100, 40);
+        let margin = app.config.scrolloff.min((app.diff_height - 1) / 2);
+        assert_eq!(
+            app.diff_scroll + app.diff_height - 1 - margin,
+            100,
+            "moving keeps only the scrolloff margin"
+        );
+        app.key(KeyCode::Char('z').into()).unwrap();
+        app.key(KeyCode::Char('z').into()).unwrap();
+        screen(&mut app, 100, 40);
+        assert_eq!(
+            100 - app.diff_scroll,
+            (app.diff_height - 1) / 2,
+            "the cursor row is in the middle"
+        );
+        app.key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('d'),
+            ratatui::crossterm::event::KeyModifiers::CONTROL,
+        ))
+        .unwrap();
+        screen(&mut app, 100, 40);
+        let cursor = app.session.as_ref().unwrap().cursor;
+        assert_eq!(cursor, 100 + app.diff_height / 2);
+        assert_eq!(cursor - app.diff_scroll, (app.diff_height - 1) / 2);
     }
 
     #[test]

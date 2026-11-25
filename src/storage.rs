@@ -12,9 +12,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// The two compared folders, or with `files` the two compared files themselves.
 #[derive(Clone, Debug)]
 pub struct Roots {
     pub paths: [PathBuf; 2],
+    pub files: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,22 +62,64 @@ impl Fingerprint {
 }
 
 impl Roots {
+    /// Compare two folders or two files; a folder and a file are rejected.
     pub fn new(left: &Path, right: &Path) -> Result<Self> {
         let paths = [
             left.canonicalize()
-                .with_context(|| format!("Cannot open left folder {}", left.display()))?,
+                .with_context(|| format!("Cannot open left path {}", left.display()))?,
             right
                 .canonicalize()
-                .with_context(|| format!("Cannot open right folder {}", right.display()))?,
+                .with_context(|| format!("Cannot open right path {}", right.display()))?,
         ];
         for path in &paths {
-            ensure!(path.is_dir(), "{} is not a folder", path.display());
+            ensure!(
+                path.is_dir() || path.is_file(),
+                "{} is neither a folder nor a regular file",
+                path.display()
+            );
         }
+        let files = paths.each_ref().map(|path| path.is_file());
+        let kind = |file: bool| if file { "a file" } else { "a folder" };
         ensure!(
-            !paths[0].starts_with(&paths[1]) && !paths[1].starts_with(&paths[0]),
-            "Choose two separate folders: the folders must not be equal or contain each other"
+            files[0] == files[1],
+            "Compare two folders or two files: the left path is {} and the right path is {}",
+            kind(files[0]),
+            kind(files[1])
         );
-        Ok(Self { paths })
+        if files[0] {
+            ensure!(paths[0] != paths[1], "Choose two different files");
+        } else {
+            ensure!(
+                !paths[0].starts_with(&paths[1]) && !paths[1].starts_with(&paths[0]),
+                "Choose two separate folders: the folders must not be equal or contain each other"
+            );
+        }
+        Ok(Self {
+            paths,
+            files: files[0],
+        })
+    }
+
+    /// The path under which a pair of files is opened: the left file's name, which
+    /// also selects the syntax colours. None when comparing folders.
+    pub fn file_name(&self) -> Option<PathBuf> {
+        self.files
+            .then(|| PathBuf::from(self.paths[0].file_name().unwrap_or_default()))
+    }
+
+    /// The name of an open file; for a pair of files with different names, both.
+    pub fn title(&self, relative: &Path) -> String {
+        let names = self
+            .paths
+            .each_ref()
+            .map(|path| path.file_name().unwrap_or_default().to_string_lossy());
+        if !self.files {
+            relative.display().to_string()
+        } else if names[0] == names[1] {
+            names[0].to_string()
+        } else {
+            format!("{} ↔ {}", names[0], names[1])
+        }
     }
 
     /// Validate every component before accessing it; symlinks are intentionally
@@ -83,6 +127,20 @@ impl Roots {
     fn checked_path(&self, side: usize, relative: &Path) -> Result<PathBuf> {
         ensure!(side < 2, "Invalid side");
         ensure!(!relative.as_os_str().is_empty(), "A file path is required");
+        if let Some(name) = self.file_name() {
+            ensure!(relative == name, "Invalid file: {}", relative.display());
+            let path = self.paths[side].clone();
+            match fs::symlink_metadata(&path) {
+                Ok(meta) => ensure!(meta.is_file(), "Not a regular file: {}", path.display()),
+                // A file deleted since starting shows as missing; saving creates it again.
+                Err(error) if error.kind() == ErrorKind::NotFound => (),
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("Cannot inspect {}", path.display()));
+                }
+            }
+            return Ok(path);
+        }
         let mut path = self.paths[side].clone();
         let root_meta = fs::symlink_metadata(&path)?;
         ensure!(
@@ -441,6 +499,10 @@ struct RawNode {
 }
 
 pub fn scan(roots: &Roots, include: &str, exclude: &str, ignore_ws: bool) -> Result<Vec<Node>> {
+    // Two chosen files are always compared; the folder filters do not apply to them.
+    if let Some(name) = roots.file_name() {
+        return Ok(vec![file_pair(roots, name, ignore_ws)]);
+    }
     let include = Patterns::new(include)?;
     let exclude = Patterns::new(exclude)?;
     let mut raw = BTreeMap::<PathBuf, RawNode>::new();
@@ -563,6 +625,38 @@ pub fn scan(roots: &Roots, include: &str, exclude: &str, ignore_ws: bool) -> Res
     let mut out = Vec::new();
     flatten(Path::new(""), &children, &mut nodes, &mut out);
     Ok(out)
+}
+
+fn file_pair(roots: &Roots, path: PathBuf, ignore_ws: bool) -> Node {
+    let bytes = [roots.read(0, &path), roots.read(1, &path)];
+    let present = bytes.each_ref().map(|bytes| matches!(bytes, Ok(Some(_))));
+    let sizes = bytes.each_ref().map(|bytes| match bytes {
+        Ok(Some(bytes)) => Some(bytes.len() as u64),
+        _ => None,
+    });
+    let mut errors: Vec<_> = bytes
+        .iter()
+        .filter_map(|bytes| bytes.as_ref().err())
+        .map(|error| format!("{error:#}"))
+        .collect();
+    let status = match &bytes {
+        _ if !errors.is_empty() => Status::Error,
+        [Ok(Some(left)), Ok(Some(right))] => compare_bytes(left, right, ignore_ws),
+        [Ok(Some(_)), _] => Status::LeftOnly,
+        [_, Ok(Some(_))] => Status::RightOnly,
+        _ => {
+            errors.push("Both files are missing".to_string());
+            Status::Error
+        }
+    };
+    Node {
+        path,
+        is_dir: false,
+        present,
+        sizes,
+        status,
+        error: (!errors.is_empty()).then(|| errors.join("; ")),
+    }
 }
 
 fn walk(
@@ -763,6 +857,56 @@ mod tests {
         fs::create_dir(roots.paths[0].join("nested")).unwrap();
         assert!(Roots::new(&roots.paths[0], &roots.paths[0].join("nested")).is_err());
         assert!(roots.open(Path::new("../outside"), false).is_err());
+    }
+
+    #[test]
+    fn file_pairs_compare_save_and_reject_mixed_or_identical_paths() {
+        let (_temp, roots) = folders();
+        let left = roots.paths[0].join("left name.txt");
+        let right = roots.paths[1].join("other.txt");
+        fs::write(&left, b"same\nleft\n").unwrap();
+        fs::write(&right, b"\xef\xbb\xbfsame\r\nright\r\n").unwrap();
+        assert!(Roots::new(&left, &roots.paths[1]).is_err());
+        assert!(Roots::new(&roots.paths[0], &right).is_err());
+        assert!(Roots::new(&left, &left).is_err());
+        assert!(Roots::new(&left, &roots.paths[1].join("missing.txt")).is_err());
+        let files = Roots::new(&left, &right).unwrap();
+        assert!(files.files && !roots.files);
+        assert_eq!(roots.file_name(), None);
+        let name = files.file_name().unwrap();
+        assert_eq!(name, Path::new("left name.txt"));
+        assert_eq!(files.title(&name), "left name.txt ↔ other.txt");
+        fs::write(roots.paths[1].join("left name.txt"), b"same\n").unwrap();
+        let same_names = Roots::new(&left, &roots.paths[1].join("left name.txt")).unwrap();
+        assert_eq!(same_names.title(&name), "left name.txt");
+        // The folder filters never hide the two chosen files.
+        let nodes = scan(&files, "*.rs", "*.txt", false).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].path, name);
+        assert_eq!(nodes[0].status, Status::Different);
+        assert!(files.open(Path::new("other.txt"), false).is_err());
+        let mut session = files.open(&name, false).unwrap();
+        session.merge(1, true, false, true).unwrap();
+        files.save(&mut session, 1, false).unwrap();
+        assert_eq!(fs::read(&right).unwrap(), b"\xef\xbb\xbfsame\r\nleft\r\n");
+        assert_eq!(fs::read(&left).unwrap(), b"same\nleft\n");
+        assert_eq!(
+            scan(&files, "", "", false).unwrap()[0].status,
+            Status::Minor
+        );
+        fs::write(&left, b"external\n").unwrap();
+        assert_eq!(files.disk_changed(&session), [true, false]);
+        // A file deleted since starting shows as missing; saving creates it again.
+        fs::remove_file(&right).unwrap();
+        assert_eq!(
+            scan(&files, "", "", false).unwrap()[0].status,
+            Status::LeftOnly
+        );
+        let mut session = files.open(&name, false).unwrap();
+        assert!(!session.docs[1].exists);
+        session.merge(1, true, false, true).unwrap();
+        files.save(&mut session, 1, false).unwrap();
+        assert_eq!(fs::read(&right).unwrap(), b"external\n");
     }
 
     #[test]

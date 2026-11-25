@@ -158,10 +158,11 @@ impl Input {
         self.value != old
     }
 
-    /// Complete the directory component under the cursor. Later components remain
-    /// intact. Repeated Tab / Shift+Tab cycles candidates. Quotes are a field
-    /// wrapper, not shell syntax; completing an unfinished wrapper closes it.
-    pub fn complete(&mut self, backward: bool) -> Result<()> {
+    /// Complete the directory component under the cursor, with `files` also file
+    /// names. Later components remain intact. Repeated Tab / Shift+Tab cycles
+    /// candidates. Quotes are a field wrapper, not shell syntax; completing an
+    /// unfinished wrapper closes it.
+    pub fn complete(&mut self, backward: bool, files: bool) -> Result<()> {
         if self.completion_value.as_deref() == Some(&self.value)
             && self.completion_cursor == Some(self.cursor)
             && !self.completions.is_empty()
@@ -217,7 +218,9 @@ impl Input {
             for entry in entries {
                 let entry = entry?;
                 // Follow directory symlinks for path entry; the chosen root is canonicalized later.
-                if !entry.path().is_dir() {
+                // A file name ends the path: offer files only without later components.
+                let directory = entry.path().is_dir();
+                if !directory && !(files && suffix.is_empty() && entry.path().is_file()) {
                     continue;
                 }
                 let name = entry.file_name();
@@ -227,8 +230,17 @@ impl Input {
                     |fragment| name.to_lowercase().starts_with(fragment),
                 );
                 if matches && (fragment.starts_with('.') || !name.starts_with('.')) {
-                    let completed = format!("{prefix}{name}{separator}{suffix}");
-                    let cursor = body_start + prefix.len() + name.len() + separator.len_utf8();
+                    let (completed, cursor) = if directory {
+                        (
+                            format!("{prefix}{name}{separator}{suffix}"),
+                            body_start + prefix.len() + name.len() + separator.len_utf8(),
+                        )
+                    } else {
+                        (
+                            format!("{prefix}{name}"),
+                            body_start + prefix.len() + name.len(),
+                        )
+                    };
                     let completed = match quote {
                         Some(quote) => format!("{quote}{completed}{quote}"),
                         None => completed,
@@ -310,15 +322,38 @@ mod tests {
         }
         fs::write(directory.path().join("my file"), "").unwrap();
         let mut input = Input::new(format!("{}/my ", directory.path().display()));
-        input.complete(false).unwrap();
+        input.complete(false, false).unwrap();
         assert!(input.value.ends_with("/my alpha/"));
-        input.complete(false).unwrap();
+        input.complete(false, false).unwrap();
         assert!(input.value.ends_with("/my beta/"));
-        input.complete(true).unwrap();
+        input.complete(true, false).unwrap();
         assert!(input.value.ends_with("/my alpha/"));
         input.handle(key(KeyCode::Char('c')));
-        input.complete(false).unwrap();
+        input.complete(false, false).unwrap();
         assert!(input.value.ends_with("/my alpha/child/"));
+    }
+
+    #[test]
+    fn file_completion_offers_files_without_a_trailing_separator() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("my folder")).unwrap();
+        fs::write(directory.path().join("my file.txt"), "").unwrap();
+        let mut input = Input::new(format!("{}/my ", directory.path().display()));
+        input.complete(false, true).unwrap();
+        assert!(input.value.ends_with("/my file.txt"));
+        assert_eq!(input.cursor, input.value.len());
+        input.complete(false, true).unwrap();
+        assert!(input.value.ends_with("/my folder/"));
+        // A file cannot contain the components after the cursor.
+        let mut input = Input::new(format!("{}/my /rest", directory.path().display()));
+        input.cursor = format!("{}/my ", directory.path().display()).len();
+        input.complete(false, true).unwrap();
+        assert!(input.value.ends_with("/my folder/rest"));
+        input.complete(false, true).unwrap();
+        assert!(
+            input.value.ends_with("/my folder/rest"),
+            "no other candidate"
+        );
     }
 
     #[test]
@@ -331,7 +366,7 @@ mod tests {
                     "{quote}{}/my f{closing}",
                     directory.path().display()
                 ));
-                input.complete(false).unwrap();
+                input.complete(false, false).unwrap();
                 assert_eq!(
                     input.value,
                     format!("{quote}{}/my folder/{quote}", directory.path().display())
@@ -342,7 +377,7 @@ mod tests {
                     directory.path().join("my folder")
                 );
                 input.handle(key(KeyCode::Char('c')));
-                input.complete(false).unwrap();
+                input.complete(false, false).unwrap();
                 assert!(input.value.ends_with(&format!("/my folder/child/{quote}")));
                 assert_eq!(input.cursor, input.value.len() - 1);
             }
@@ -357,23 +392,23 @@ mod tests {
         }
         let mut input = Input::new(format!("\"{}/界 wrong/child\"", directory.path().display()));
         input.cursor = format!("\"{}/界 ", directory.path().display()).len();
-        input.complete(false).unwrap();
+        input.complete(false, false).unwrap();
         assert_eq!(
             input.value,
             format!("\"{}/界 alpha/child\"", directory.path().display())
         );
         assert_eq!(&input.value[input.cursor..], "child\"");
-        input.complete(false).unwrap();
+        input.complete(false, false).unwrap();
         assert_eq!(
             input.value,
             format!("\"{}/界 beta/child\"", directory.path().display())
         );
         assert_eq!(&input.value[input.cursor..], "child\"");
-        input.complete(true).unwrap();
+        input.complete(true, false).unwrap();
         assert!(input.value.contains("界 alpha"));
         // Moving the cursor ends cycling and completes the next component.
         input.handle(key(KeyCode::Right));
-        input.complete(false).unwrap();
+        input.complete(false, false).unwrap();
         assert_eq!(
             input.value,
             format!("\"{}/界 alpha/child/\"", directory.path().display())
@@ -466,7 +501,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir(directory.path().join(r"folder\name")).unwrap();
         let mut input = Input::new(format!("{}/folder\\na", directory.path().display()));
-        input.complete(false).unwrap();
+        input.complete(false, false).unwrap();
         assert!(input.value.ends_with("/folder\\name/"));
         assert!(expand_path(&input.value).unwrap().is_dir());
     }
@@ -477,7 +512,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir(directory.path().join("CaseFolder")).unwrap();
         let mut input = Input::new(format!("{}/casef", directory.path().display()));
-        input.complete(false).unwrap();
+        input.complete(false, false).unwrap();
         assert!(input.value.ends_with("/CaseFolder/"));
         assert!(expand_path(&input.value).unwrap().is_dir());
     }

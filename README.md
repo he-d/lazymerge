@@ -3,17 +3,18 @@
 </h1>
 
 <p align="center">
-  Compare and merge two folders side by side, with vim-style keys.<br>
+  Compare and merge two folders or two files side by side, with vim-style keys.<br>
   A Rust terminal app and a self-contained HTML app. Both work locally, without a server.
 </p>
 
-Current version: **0.1.4** for both the terminal and browser apps.
+Current version: **0.1.5** for both the terminal and browser apps.
 
 ## Terminal version
 
 The Rust TUI centers the custom violet-and-green ASCII wordmark at the top, with its size calculated from [`src/logo.txt`](src/logo.txt). It uses the HTML app's Kanagawa colours and layout: a shared folder tree above aligned, side-by-side file panes. Where a line is missing on one side, that side shows red diagonal stripes, as in the browser app. Smaller terminals get a centered compact header. The version stays visible below the wordmark.
 
 - Compare folders, expand or collapse their trees, search file names, and filter included or excluded files.
+- Compare two files directly: `lazymerge -l left_file.txt -r right_file.txt` opens them side by side, without the folder tree.
 - Distinguish changed files, files present on one side, minor differences (line endings, BOM or ignored whitespace), identical files and read errors.
 - Navigate differing sections, highlight changed characters, select lines, merge in either direction, edit or delete lines and undo. Edits stay in memory until saved.
 - Copy a file or a folder's differing/missing files as raw bytes after confirmation. Copies write to disk immediately; they never delete files.
@@ -37,7 +38,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/he-
 
 The installers download a prebuilt binary from [GitHub Releases](https://github.com/he-d/lazymerge/releases), verify its SHA-256 checksum, and install for your user account. No Rust toolchain, Lua installation or administrator access is needed. Rerun the same command to update.
 
-Linux/macOS installs to `~/.local/bin` by default; the installer prints any `PATH` setup needed. Windows installs to `%LOCALAPPDATA%\LazyMerge\bin` and updates your user `PATH`; open a new terminal afterward. Set `LAZYMERGE_INSTALL_DIR` to use another directory or `LAZYMERGE_VERSION=0.1.4` to select a release.
+Linux/macOS installs to `~/.local/bin` by default; the installer prints any `PATH` setup needed. Windows installs to `%LOCALAPPDATA%\LazyMerge\bin` and updates your user `PATH`; open a new terminal afterward. Set `LAZYMERGE_INSTALL_DIR` to use another directory or `LAZYMERGE_VERSION=0.1.5` to select a release.
 
 The download commands require the installer files on `main` and published release binaries; see [Publishing a release](#publishing-a-release). To install directly from a local checkout, install a Rust toolchain and a C compiler, then run:
 
@@ -51,11 +52,14 @@ This installs the `lazymerge` command in Cargo's binary directory, normally `~/.
 lazymerge
 lazymerge "path to left folder" "path to right folder"
 lazymerge -l /path/to/left -r /path/to/right
+lazymerge -l left_file.txt -r right_file.txt
 ```
 
-Without arguments, LazyMerge asks for the left folder, then the right folder; press `Enter` to accept each path. Supplying both folders skips these prompts. Supplying just one folder asks only for the missing side.
+Without arguments, LazyMerge asks for the left path, then the right path; press `Enter` to accept each path. Supplying both paths skips these prompts. Supplying just one path asks only for the missing side.
 
-Path fields support `Tab` / `Shift+Tab` directory completion, relative and absolute paths, `~/`, spaces and quoted paths. Repeated completion cycles candidates. Completion also works inside a path and closes unfinished quotes. Press `p` to choose another folder pair later.
+Both paths are folders or both are files; a folder and a file are rejected. Two files open straight in the file view, which then fills the window: there is no folder tree, so `Tab` and `Esc` do not leave the file view, and the folder filters do not apply. The two files may have different names; the title shows both, and each side's header shows its full path. Merging, editing, deleting, undo, saving and the checks for external changes work as for a file inside two folders.
+
+Path fields support `Tab` / `Shift+Tab` directory completion, relative and absolute paths, `~/`, spaces and quoted paths. When the other side is a file, completion offers files as well. Repeated completion cycles candidates. Completion also works inside a path and closes unfinished quotes. Press `p` to choose another pair of folders or files later.
 
 Press `q` outside text fields to quit, or `Ctrl+C` from anywhere. LazyMerge always asks before closing, including when there are no unsaved edits. Confirmations start on **No**: `Enter` cancels, `y` accepts, and `n` / `Esc` cancels; `Tab` or left/right changes the selected choice. In text fields, `q` is ordinary input.
 
@@ -78,20 +82,22 @@ These are the defaults; `?` opens help showing your configured bindings. `Tab` s
 | `r` | Tree / diff | Rescan folders / reload both open files; asks before discarding edits |
 | `Alt+l` / `Alt+h` | Tree | Copy the selected file or folder to the right / left, after confirmation |
 | `gg` / `G`, `Home` / `End` | Both panes | First / last row; in a file its start / end |
-| `Ctrl+d` / `Ctrl+u` | Diff | Move half a page down / up |
+| `zz` | Both panes | Scroll the cursor row (the selected row in the tree) to the middle, like vim |
+| `Ctrl+d` / `Ctrl+u` | Diff | Move half a page down / up, then put the cursor row in the middle |
 | `n` / `N` | Diff | Next / previous differing section |
 | `h` / `←`, `l` / `→` | Diff | Scroll horizontally |
 | `v` | Diff | Start / finish selecting rows; moving extends the selection |
 | `L` / `H` | Diff | Merge selected rows, or the current section, to the right / left |
 | `Alt+l` / `Alt+h` | Diff | Stage the whole file on the right / left, including its final newline |
 | `i` / `I` | Diff | Edit the left / right selection, section or line |
+| `dd` | Diff | Delete the line, or the selected lines, on both sides; one `u` restores both sides |
 | `dh` / `dl` | Diff | Delete the line on the left / right, or the selected lines on that side; the cursor moves on to that side's next line |
 | `u` | Diff | Undo an edit or merge |
 | `Ctrl+S` | Open file, including editor | Save the left side |
 | `Ctrl+Alt+s` | Open file, including editor | Save the right side |
 | `Alt+s` / `Alt+Shift+s` | Open file, including editor | Save both sides |
 | `Alt+Enter` | Editor | Apply the edit to the staged buffer |
-| `Esc` | Diff | Clear a selection, otherwise close the file; asks before discarding edits |
+| `Esc` | Diff | Clear a selection, otherwise close the file; asks before discarding edits. Two files compared on their own stay open |
 | `q` / `Ctrl+C` | Outside text fields / anywhere | Ask before quitting |
 
 In file search, `Enter` / `Shift+Enter` jumps to the next / previous match; `Esc` returns to the file. In the editor, `Enter` inserts a line, `Tab` inserts spaces, `Alt+Enter` applies the edit and `Esc` cancels it. `Ctrl+Enter` also applies when the terminal delivers it; the app cannot intercept shortcuts consumed by the desktop or terminal. The Lua `keys.accept_edit` setting can change the primary shortcut. A save shortcut applies the editor first. Applying an edit stages it; saving writes it to disk. `Alt+s` always saves both sides of an open file, including with older Lua bindings.
@@ -136,7 +142,7 @@ return {
 }
 ```
 
-See [`config.example.lua`](config.example.lua) for all settings, colour names and configurable actions. Bindings support characters, named keys and modifiers such as `ctrl+q`, `alt+l` or `f2`; letter case matters. Two characters such as `gg` or `dl` are typed one after the other, like in vim; `Esc` cancels a started sequence. A sequence's first key cannot also be a single-key binding in the same view; `d` can, because it filters the folder tree while `dh` / `dl` only work in an open file. Older configs with `top = "g"` keep working as `gg`. Set a binding to `""` to disable it. Unknown settings, invalid colours and duplicate bindings produce an error. Quit confirmation always remains enabled.
+See [`config.example.lua`](config.example.lua) for all settings, colour names and configurable actions. Bindings support characters, named keys and modifiers such as `ctrl+q`, `alt+l` or `f2`; letter case matters. Two characters such as `gg`, `zz` or `dl` are typed one after the other, like in vim; `Esc` cancels a started sequence. A sequence's first key cannot also be a single-key binding in the same view; `d` can, because it filters the folder tree while `dd` / `dh` / `dl` only work in an open file. Older configs with `top = "g"` keep working as `gg`. Set a binding to `""` to disable it. Unknown settings, invalid colours and duplicate bindings produce an error. Quit confirmation always remains enabled.
 
 Navigation bindings are named `scroll_left = "h"`, `scroll_right = "l"`, `scroll_down = "j"` and `scroll_up = "k"`. Left/right scroll file text horizontally; in the folder tree they collapse/expand folders. Up/down move through rows in either view. The older names `collapse`, `expand`, `down` and `up` remain accepted for existing config files; use one name per action.
 
@@ -156,7 +162,7 @@ This overwrites the default config and exits. It works even if the old file has 
 
 Saving preserves a UTF-8 target's BOM, predominant line ending and final-newline state. Section/whole-file merges reaching the end transfer the source's final-newline state; newly created targets inherit the source's format. Editing a file with mixed line endings normalizes it to its predominant line ending. UTF-16 and Windows-1252 can be compared and used as text sources, but cannot be edited or saved in their original encoding. Binary files can be copied from the tree. Raw copies preserve the original bytes.
 
-The two roots must be separate existing directories; identical or nested roots are rejected. Symlinks and file/directory type conflicts appear as errors and are not traversed or overwritten. Saves use temporary files and atomic replacement, and both saves and copies check for external changes before writing. Writes are atomic per file; a folder copy can stop partway through if a later file cannot be written.
+The two roots must be separate existing directories; identical or nested roots are rejected. Two compared files must be different existing files. Symlinks and file/directory type conflicts appear as errors and are not traversed or overwritten. Saves use temporary files and atomic replacement, and both saves and copies check for external changes before writing. Writes are atomic per file; a folder copy can stop partway through if a later file cannot be written.
 
 The terminal app lives in [`src/`](src), using Ratatui, a vendored Lua interpreter and the same comparison/merge concepts as the browser app. To build and check it:
 
@@ -167,13 +173,13 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-On Unix, `cargo build --locked` followed by `python3 tests/pty_smoke.py` exercises config creation and reset, startup and path completion, both command-line path forms, the edit/save shortcuts, CRLF preservation, external changes and save conflicts, mouse clicks, focus changes and quit confirmation in a real terminal session.
+On Unix, `cargo build --locked` followed by `python3 tests/pty_smoke.py` exercises config creation and reset, startup and path completion, both command-line path forms, comparing two files, the edit/save and `dd` shortcuts, CRLF preservation, external changes and save conflicts, mouse clicks, focus changes and quit confirmation in a real terminal session.
 
 Run `python3 tests/test_install.py` for the Unix installer's offline integration tests. Windows installer tests run with `powershell -ExecutionPolicy Bypass -File tests/test_install.ps1`.
 
 ### Publishing a release
 
-The [release workflow](.github/workflows/release.yml) tests and builds native x64/ARM64 binaries for Linux, macOS and Windows. It also runs the terminal smoke tests on Linux and macOS. Linux builds use musl. Pushing a version tag matching both apps, such as `v0.1.4`, publishes the archives, `SHA256SUMS`, browser HTML, installers and example config to GitHub Releases. Installer updates check these release checksums before replacing an existing executable.
+The [release workflow](.github/workflows/release.yml) tests and builds native x64/ARM64 binaries for Linux, macOS and Windows. It also runs the terminal smoke tests on Linux and macOS. Linux builds use musl. Pushing a version tag matching both apps, such as `v0.1.5`, publishes the archives, `SHA256SUMS`, browser HTML, installers and example config to GitHub Releases. Installer updates check these release checksums before replacing an existing executable.
 
 Publish the source and installer scripts on `main` before pushing the release tag. Running the workflow manually builds and checks the packages without publishing a release. The public one-line commands become usable after those files and release assets are published.
 

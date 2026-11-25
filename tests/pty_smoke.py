@@ -179,7 +179,7 @@ def main():
 
         tui = Tui(["--config", config])
         try:
-            tui.wait_for("Left folder path")
+            tui.wait_for("Left folder or file")
             tui.send(str(root / "left") + "\t\r")
             tui.wait_for("Right")
             tui.send(str(root / "right") + "\t\r")
@@ -239,7 +239,23 @@ def main():
                 tui.quit()
             finally:
                 tui.close()
-    print("PTY smoke tests passed: config creation/reset, startup/completion, Shift+f, Alt+Enter, save both, auto-refresh/conflicts, mouse, focus, confirmed quit")
+
+        # Two files open directly in the file view, without the folder tree.
+        tui = Tui(["--config", config, "-l", left / "demo.txt", "-r", right / "demo.txt"])
+        try:
+            tui.wait_for("Compared 2 files")
+            tui.wait_for("demo.txt · 1 sections [active]")
+            assert "Folders ·" not in "\n".join("".join(row) for row in tui.screen)
+            tui.send("dd")  # Delete the first line on both sides.
+            tui.wait_for("Delete staged")
+            tui.send("\x1bs")
+            tui.wait_for("Saved Left, Right")
+            assert (left / "demo.txt").read_bytes() == b"disk edit\nend\n"
+            assert (right / "demo.txt").read_bytes() == b""
+            tui.quit()
+        finally:
+            tui.close()
+    print("PTY smoke tests passed: config creation/reset, startup/completion, Shift+f, Alt+Enter, save both, auto-refresh/conflicts, mouse, focus, two files with dd, confirmed quit")
 
 
 if __name__ == "__main__":

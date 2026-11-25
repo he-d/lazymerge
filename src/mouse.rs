@@ -350,6 +350,7 @@ mod tests {
         app.prompt = None;
         app.roots = Some(Roots {
             paths: [PathBuf::from("/left"), PathBuf::from("/right")],
+            files: false,
         });
         app.session = Some(Session::new(
             "sample.txt".into(),

@@ -12,16 +12,21 @@ use clap::Parser;
 use std::{io::IsTerminal, path::PathBuf};
 
 #[derive(Debug, Parser)]
-#[command(version, about = "Compare and merge two folders in your terminal")]
+#[command(
+    version,
+    about = "Compare and merge two folders or two files in your terminal"
+)]
 struct Args {
-    /// Left folder (omit both folders for interactive path entry)
+    /// Left folder or file (omit both paths for interactive path entry)
     #[arg(value_name = "LEFT", conflicts_with = "left")]
     left_path: Option<PathBuf>,
-    /// Right folder
+    /// Right folder or file; compare two folders or two files
     #[arg(value_name = "RIGHT", conflicts_with = "right")]
     right_path: Option<PathBuf>,
+    /// Left folder or file
     #[arg(short = 'l', long, value_name = "PATH", conflicts_with_all = ["left_path", "right_path"])]
     left: Option<PathBuf>,
+    /// Right folder or file
     #[arg(short = 'r', long, value_name = "PATH", conflicts_with_all = ["left_path", "right_path"])]
     right: Option<PathBuf>,
     /// Lua configuration file (created automatically at the default path)

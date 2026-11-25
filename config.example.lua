@@ -3,7 +3,7 @@
 -- Windows: %LOCALAPPDATA%\lazymerge\config.lua. macOS: ~/Library/Application Support/lazymerge/config.lua.
 -- XDG_CONFIG_HOME overrides the default on every platform.
 -- Restore defaults with: lazymerge --reset-config (overwrites this file).
--- Alternatively: lazymerge --config /path/to/config.lua left right
+-- Alternatively: lazymerge --config /path/to/config.lua left right (two folders or two files)
 -- Return a Lua table. Omitted settings and nested colors/keys keep their defaults.
 -- This is executable Lua: expressions and local variables work here.
 return {
@@ -53,10 +53,12 @@ return {
     expand_all = "e", collapse_all = "c", all = "a", differences = "d",
     find = "/", copy_right = "alt+l", copy_left = "alt+h", -- tree: copy; diff: merge whole file
     merge_right = "L", merge_left = "H", edit_left = "i", edit_right = "I",
-    delete_left = "dh", delete_right = "dl", -- delete the line or selected lines
+    -- Delete the line or the selected lines on both sides, only the left or only the right.
+    delete_both = "dd", delete_left = "dh", delete_right = "dl",
     undo = "u", save_left = "ctrl+s", save_right = "ctrl+alt+s", save_both = "alt+s",
     accept_edit = "alt+enter", -- Ctrl+Enter also applies if the terminal delivers it
     next = "n", previous = "N", select = "v", top = "gg", bottom = "G",
+    center = "zz", -- cursor row to the middle; Ctrl+d / Ctrl+u also center after moving
     paths = "p", include = "f", exclude = "F", whitespace = "w", focus = "tab",
   },
 }

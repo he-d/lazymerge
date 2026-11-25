@@ -309,11 +309,17 @@ impl Diff {
 }
 
 #[derive(Debug)]
-struct Change {
+struct Snapshot {
     side: usize,
     lines: Vec<String>,
     final_newline: bool,
     pending_create: bool,
+}
+
+/// One undo step. Deleting on both sides restores both with a single undo.
+#[derive(Debug)]
+struct Change {
+    sides: Vec<Snapshot>,
     cursor: usize,
 }
 
@@ -389,12 +395,17 @@ impl Session {
         insertion..insertion
     }
 
-    fn remember(&mut self, side: usize) {
+    fn remember(&mut self, sides: &[usize]) {
         self.history.push(Change {
-            side,
-            lines: self.docs[side].lines.clone(),
-            final_newline: self.docs[side].final_newline,
-            pending_create: self.docs[side].pending_create,
+            sides: sides
+                .iter()
+                .map(|&side| Snapshot {
+                    side,
+                    lines: self.docs[side].lines.clone(),
+                    final_newline: self.docs[side].final_newline,
+                    pending_create: self.docs[side].pending_create,
+                })
+                .collect(),
             cursor: self.cursor,
         });
         if self.history.len() > 200 {
@@ -452,7 +463,7 @@ impl Session {
         {
             return Ok(());
         }
-        self.remember(to);
+        self.remember(&[to]);
         self.docs[to].lines.splice(target, replacement);
         self.docs[to].final_newline = final_newline;
         self.docs[to].pending_create |= create;
@@ -474,9 +485,12 @@ impl Session {
         let Some(change) = self.history.pop() else {
             return false;
         };
-        self.docs[change.side].lines = change.lines;
-        self.docs[change.side].final_newline = change.final_newline;
-        self.docs[change.side].pending_create = change.pending_create;
+        for snapshot in change.sides {
+            let doc = &mut self.docs[snapshot.side];
+            doc.lines = snapshot.lines;
+            doc.final_newline = snapshot.final_newline;
+            doc.pending_create = snapshot.pending_create;
+        }
         self.cursor = change.cursor;
         self.refresh_diff(self.ignore_whitespace);
         true
@@ -510,7 +524,7 @@ impl Session {
         {
             return Ok(());
         }
-        self.remember(side);
+        self.remember(&[side]);
         self.docs[side].lines.splice(range, replacement);
         self.docs[side].final_newline = final_newline;
         self.docs[side].pending_create = !self.docs[side].exists;
@@ -518,36 +532,54 @@ impl Session {
         Ok(())
     }
 
-    /// Remove the selected rows, otherwise the cursor row, from one side. The cursor
-    /// moves on to that side's next line, so repeating it works like vim's `dd`.
-    pub fn delete(&mut self, side: usize, ignore_whitespace: bool) -> Result<()> {
-        if side > 1 {
+    /// Remove the selected rows, otherwise the cursor row, from the given sides; one
+    /// undo restores them all. With one side the cursor moves on to that side's next
+    /// line, so repeating it works like vim's `dd`. With both sides it stays on the
+    /// row that follows the deleted ones.
+    pub fn delete(&mut self, sides: &[usize], ignore_whitespace: bool) -> Result<()> {
+        if sides.is_empty() || sides.iter().any(|&side| side > 1) {
             bail!("Invalid side");
-        }
-        if self.docs[side].readonly {
-            bail!("This side is read-only");
         }
         let rows = self.anchor.map_or(self.cursor..self.cursor + 1, |anchor| {
             anchor.min(self.cursor)..anchor.max(self.cursor) + 1
         });
-        let range = self.range(side, rows.clone());
-        if range.is_empty() {
-            bail!("No line to delete on that side");
+        let ranges: Vec<_> = sides
+            .iter()
+            .map(|&side| (side, self.range(side, rows.clone())))
+            .filter(|(_, range)| !range.is_empty())
+            .collect();
+        if ranges.is_empty() {
+            bail!(if sides.len() == 1 {
+                "No line to delete on that side"
+            } else {
+                "No line to delete"
+            });
         }
-        self.remember(side);
-        self.docs[side].lines.drain(range);
-        // Empty files have no observable final-newline state.
-        if self.docs[side].lines.is_empty() {
-            self.docs[side].final_newline = true;
+        if ranges.iter().any(|(side, _)| self.docs[*side].readonly) {
+            bail!(if sides.len() == 1 {
+                "This side is read-only"
+            } else {
+                "One side is read-only; delete on the other side only"
+            });
+        }
+        self.remember(&ranges.iter().map(|(side, _)| *side).collect::<Vec<_>>());
+        for (side, range) in ranges {
+            self.docs[side].lines.drain(range);
+            // Empty files have no observable final-newline state.
+            if self.docs[side].lines.is_empty() {
+                self.docs[side].final_newline = true;
+            }
         }
         self.cursor = rows.start;
         self.refresh_diff(ignore_whitespace);
-        let index = |row: &DiffRow| if side == 0 { row.left } else { row.right };
-        if let Some(offset) = self.diff.rows[self.cursor..]
-            .iter()
-            .position(|row| index(row).is_some())
-        {
-            self.cursor += offset;
+        if let &[side] = sides {
+            let index = |row: &DiffRow| if side == 0 { row.left } else { row.right };
+            if let Some(offset) = self.diff.rows[self.cursor..]
+                .iter()
+                .position(|row| index(row).is_some())
+            {
+                self.cursor += offset;
+            }
         }
         Ok(())
     }
@@ -717,28 +749,69 @@ mod tests {
     fn deleting_lines_is_staged_keeps_the_final_newline_and_moves_to_the_next_line() {
         let mut s = session(b"a\nb\nc\n", b"a\nb\nc\n");
         s.cursor = 1;
-        s.delete(0, false).unwrap();
+        s.delete(&[0], false).unwrap();
         assert_eq!(s.docs[0].lines, ["a", "c"]);
         assert!(s.docs[0].dirty() && !s.docs[1].dirty());
         // The deleted "b" leaves a gap on the left; the cursor moved on to "c".
         assert_eq!(s.diff.rows[s.cursor].left, Some(1));
-        s.delete(0, false).unwrap();
+        s.delete(&[0], false).unwrap();
         assert_eq!(s.docs[0].encode(), b"a\n");
         s.cursor = 1;
         assert_eq!(s.diff.rows[1].left, None);
-        assert!(s.delete(0, false).is_err());
+        assert!(s.delete(&[0], false).is_err());
         assert!(s.undo() && s.undo());
         assert!(!s.dirty());
         s.cursor = 0;
         s.anchor = Some(1);
-        s.delete(1, false).unwrap();
+        s.delete(&[1], false).unwrap();
         assert_eq!(s.docs[1].encode(), b"c\n");
         assert!(s.anchor.is_none());
         assert_eq!(s.cursor, 2);
-        s.delete(1, false).unwrap();
+        s.delete(&[1], false).unwrap();
         assert_eq!(s.docs[1].encode(), b"");
         assert!(s.docs[1].dirty());
-        assert!(session(b"x\n", b"abc\0").delete(1, false).is_err());
+        assert!(session(b"x\n", b"abc\0").delete(&[1], false).is_err());
+    }
+
+    #[test]
+    fn deleting_on_both_sides_removes_the_row_or_selection_and_undoes_in_one_step() {
+        let mut s = session(b"a\nb\nc\nd\n", b"a\nx\nc\nd\n");
+        s.cursor = 1;
+        s.delete(&[0, 1], false).unwrap();
+        assert_eq!(s.docs[0].lines, ["a", "c", "d"]);
+        assert_eq!(s.docs[1].lines, ["a", "c", "d"]);
+        assert!(s.diff.hunks.is_empty());
+        // Like vim's dd, the cursor stays on the row, which now shows the next line.
+        assert_eq!(s.cursor, 1);
+        assert!(s.undo());
+        assert!(!s.dirty());
+        assert_eq!(s.cursor, 1);
+        assert!(!s.undo(), "one undo restores both sides");
+
+        // Selected rows, including a gap that exists on one side only.
+        let mut s = session(b"a\nb\nextra\nc\n", b"a\nb\nc\n");
+        s.anchor = Some(1);
+        s.cursor = 2;
+        s.delete(&[0, 1], false).unwrap();
+        assert_eq!(s.docs[0].lines, ["a", "c"]);
+        assert_eq!(s.docs[1].lines, ["a", "c"]);
+        assert!(s.anchor.is_none());
+        assert_eq!(s.diff.rows[s.cursor].left, Some(1));
+        s.undo();
+        assert!(!s.dirty());
+
+        // The final-newline row has no line on either side.
+        let mut s = session(b"a", b"a\n");
+        s.cursor = 1;
+        assert!(s.delete(&[0, 1], false).is_err());
+        // A read-only side is never changed, not even its editable partner.
+        let mut s = session(b"a\n", b"caf\xe9\n");
+        assert!(s.delete(&[0, 1], false).is_err());
+        assert!(!s.dirty());
+        let mut s = session(b"x\nshared\n", b"caf\xe9\nshared\n");
+        s.cursor = 0;
+        s.delete(&[0], false).unwrap();
+        assert_eq!(s.docs[0].lines, ["shared"]);
     }
 
     #[test]
